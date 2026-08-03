@@ -8,7 +8,7 @@ import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
 import {
   Plus, Trash, PencilSimple, Sparkle, Download, QrCode, Camera, TagChevron, Storefront,
   ForkKnife, Table, ChartLineUp, GearSix, Notepad, ImageSquare, Fire, Check, Tag, Receipt,
-  Star, Megaphone, ImageSquare as GalleryIcon, X, ArrowRight, Clock
+  Star, Megaphone, ImageSquare as GalleryIcon, X, ArrowRight, Clock, WhatsappLogo
 } from "@phosphor-icons/react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 
@@ -53,6 +53,7 @@ export default function OwnerDashboard() {
   const [reviews, setReviews] = useState([]);
   const [analytics, setAnalytics] = useState(null);
   const [showAiImport, setShowAiImport] = useState(false);
+  const [planStatus, setPlanStatus] = useState(null);
 
   useEffect(() => {
     if (user === false) nav("/login");
@@ -77,6 +78,10 @@ export default function OwnerDashboard() {
   useEffect(() => { if (user && user.user_id) load(); /* eslint-disable-next-line */ }, [user?.user_id]);
 
   useEffect(() => {
+    if (user?.user_id) api.get("/plan/status").then((r) => setPlanStatus(r.data)).catch(()=>{});
+  }, [user?.user_id]);
+
+  useEffect(() => {
     if (!user?.user_id) return;
     if (tab === "analytics") api.get("/analytics/owner").then((r) => setAnalytics(r.data)).catch(()=>{});
     if (tab === "orders") api.get("/orders").then((r) => setOrders(r.data)).catch(()=>{});
@@ -95,6 +100,27 @@ export default function OwnerDashboard() {
   return (
     <div className="min-h-screen bg-ink-50">
       <DashNav title="Owner console" slug={restaurant.slug} />
+      {planStatus && (planStatus.expired || planStatus.expiring_soon) && (
+        <div className={`${planStatus.expired ? "bg-red-600" : "bg-amber-500"} text-white`} data-testid="plan-banner">
+          <div className="max-w-[1600px] mx-auto px-6 lg:px-10 py-2.5 flex items-center justify-between gap-4 flex-wrap">
+            <div className="text-sm flex items-center gap-2">
+              <Sparkle size={14} weight="fill" />
+              {planStatus.expired
+                ? <>Your <b className="capitalize">{planStatus.plan}</b> plan has expired. Renew now to keep taking orders.</>
+                : <>Your <b className="capitalize">{planStatus.plan}</b> plan expires in {planStatus.days_remaining} day{planStatus.days_remaining !== 1 ? "s" : ""}. Renew to avoid interruption.</>
+              }
+            </div>
+            <a
+              href={`https://wa.me/${planStatus.renewal_whatsapp}?text=${encodeURIComponent(`Hi MenuMaker! I want to renew my ${planStatus.plan} plan for restaurant "${restaurant.name}" (slug: ${restaurant.slug}, email: ${user.email}). Please share payment details.`)}`}
+              target="_blank" rel="noreferrer"
+              data-testid="plan-renew-btn"
+              className="pill bg-white text-ink-900 hover:bg-ink-100 text-xs"
+            >
+              Renew via WhatsApp →
+            </a>
+          </div>
+        </div>
+      )}
       <div className="max-w-[1600px] mx-auto px-6 lg:px-10 py-10">
         <div className="flex items-start justify-between flex-wrap gap-6 mb-8">
           <div>

@@ -2,11 +2,22 @@ import React, { useEffect, useState } from "react";
 import PublicNav from "../components/layout/PublicNav";
 import { api } from "../lib/api";
 import { Link } from "react-router-dom";
-import { Check, Sparkle, ArrowRight } from "@phosphor-icons/react";
+import { Check, Sparkle, ArrowRight, WhatsappLogo } from "@phosphor-icons/react";
 
 export default function Pricing() {
   const [plans, setPlans] = useState([]);
-  useEffect(() => { api.get("/plans").then(r => setPlans(r.data)).catch(() => {}); }, []);
+  const [platform, setPlatform] = useState({ whatsapp: "917226978918", currency: "₹" });
+
+  useEffect(() => {
+    api.get("/plans").then(r => setPlans(r.data)).catch(() => {});
+    api.get("/platform-config").then(r => setPlatform(r.data)).catch(() => {});
+  }, []);
+
+  const payViaWhatsapp = (plan) => {
+    const msg = `Hi MenuMaker team! I want to activate the *${plan.name}* plan (${platform.currency}${plan.price}/${plan.period}). My restaurant name: ______  Registered email: ______  Please share payment details.`;
+    const url = `https://wa.me/${platform.whatsapp}?text=${encodeURIComponent(msg)}`;
+    window.open(url, "_blank");
+  };
 
   return (
     <div className="min-h-screen bg-ink-50 text-ink-900">
@@ -18,7 +29,7 @@ export default function Pricing() {
             Simple pricing, <span className="serif-italic text-clay-600">honest math.</span>
           </h1>
           <p className="mt-6 text-lg text-ink-600 leading-relaxed">
-            Start free. Grow into a plan when you're ready. Cancel with a single click.
+            Start free. Pay by WhatsApp when ready. Cancel with a single click.
           </p>
         </div>
 
@@ -36,7 +47,7 @@ export default function Pricing() {
               )}
               <div className="display text-xl font-semibold">{p.name}</div>
               <div className="mt-6 flex items-baseline gap-1">
-                <span className="display mono text-5xl font-bold">${p.price}</span>
+                <span className="display mono text-5xl font-bold">{platform.currency}{p.price}</span>
                 <span className={p.popular ? "text-ink-400" : "text-ink-500"}>/{p.period}</span>
               </div>
               <ul className="mt-8 space-y-3 flex-1">
@@ -47,19 +58,28 @@ export default function Pricing() {
                   </li>
                 ))}
               </ul>
-              <Link
-                to={p.id === "free" ? "/register" : "/contact"}
-                data-testid={`plan-cta-${p.id}`}
-                className={`mt-8 w-full ${p.popular ? "btn-accent" : "btn-ghost"}`}
-              >
-                {p.id === "free" ? "Start free" : p.cta} <ArrowRight size={14} weight="bold" />
-              </Link>
+              {p.id === "free" ? (
+                <Link to="/register" data-testid={`plan-cta-${p.id}`} className={`mt-8 w-full ${p.popular ? "btn-accent" : "btn-ghost"}`}>
+                  Start free <ArrowRight size={14} weight="bold" />
+                </Link>
+              ) : (
+                <button
+                  onClick={()=>payViaWhatsapp(p)}
+                  data-testid={`plan-cta-${p.id}`}
+                  className={`mt-8 w-full ${p.popular ? "btn-accent" : "btn-ghost"}`}
+                >
+                  <WhatsappLogo size={16} weight="fill" /> Pay via WhatsApp
+                </button>
+              )}
             </div>
           ))}
         </div>
 
-        <div className="mt-14 text-center text-sm text-ink-500">
-          Paid plans currently activated manually by our team — <Link className="btn-link" to="/contact">contact us</Link> to upgrade.
+        <div className="mt-14 text-center max-w-xl mx-auto space-y-3">
+          <div className="pill bg-moss-50 text-moss-700 border border-moss-500/30 mx-auto inline-flex">
+            <WhatsappLogo size={14} weight="fill" /> Direct WhatsApp activation — no card details, no forms
+          </div>
+          <div className="text-sm text-ink-500">Message us on <a href={`https://wa.me/${platform.whatsapp}`} className="btn-link" data-testid="wa-direct">+91 {platform.whatsapp.replace(/^91/, "")}</a> — we activate within 5 minutes on business days.</div>
         </div>
       </section>
     </div>

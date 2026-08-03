@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 3 (labelled iter-4 per main-agent context) backend testing for 5 new endpoints/behaviours: GET /api/platform-config, GET /api/plans (INR pricing), GET /api/plan/status (auth-gated, admin bypass, expired/expiring flags), GET /api/public/translate-menu/{slug}?lang=xx (Claude Sonnet 4.6, cached in db.menu_translations), and default INR currency on restaurant register. Added 14 new pytest cases (TestPlatformConfig, TestPlansPricing, TestDefaultCurrencyOnRegister, TestPlanStatus, TestTranslateMenu) — ALL 14 PASS. Full regression run: 80/81 pass. The single failure is TestAIMenuFromPhoto.test_menu_from_photo_success_shape which is pre-existing (unrelated to iter-4) — the 1x1 PNG fixture is rejected by Claude Vision with 'Could not process image'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/ai/menu-from-photo", "issue": "Pre-existing: Claude Sonnet 4.6 rejects 1x1 PNG test fixture with 'Could not process image' -> 500. Test fixture should use a real menu photo, OR endpoint should catch this specific vision error and return 400 (bad image) instead of 500."},
+      {"endpoint": "/api/public/translate-menu/{slug}", "issue": "Endpoint is unauthenticated (public) and makes a paid Claude call on every cache miss. No rate limiting -> potential abuse: any attacker can force translations to arbitrary lang codes for any public slug. Consider rate-limiting per-IP or restricting to owner-authenticated calls the first time."},
+      {"endpoint": "/api/public/translate-menu/{slug}", "issue": "lang parameter is unvalidated free-text — any string is passed to LLM (session_id includes it). Should whitelist against lang_map keys and return 400 for unknown codes."},
+      {"endpoint": "/api/public/translate-menu/{slug}", "issue": "Cache is not invalidated when owner edits menu (items/categories/tagline/about_us). Stale translations will be served indefinitely. Owner PATCH endpoints should delete db.menu_translations docs for that restaurant_id."},
+      {"endpoint": "/api/plan/status", "issue": "days_remaining uses integer floor of seconds/86400 — an owner whose plan expires in 6 hours will read days_remaining=0 AND expiring_soon=true. If today is exactly expiry day (a few hours before midnight), days_remaining=0 is correct but the semantics conflate 'expiring today' with 'already used up'. Consider ceil() so a plan with 6h left shows days_remaining=1."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: whitelist lang param on /api/public/translate-menu and rate-limit to prevent LLM abuse on the unauthenticated endpoint.",
+    "Optional: invalidate db.menu_translations cache on any owner mutation (PATCH restaurant, categories, items).",
+    "Optional: replace 1x1 PNG in TestAIMenuFromPhoto with a real menu photo asset, or make endpoint return 400 for Claude 'Could not process image' errors.",
+    "Optional: use math.ceil for days_remaining so partial days show as 1 not 0."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to 1365 lines — well past the 700-line threshold. Split into routers/ (auth, restaurant, menu, orders, coupons, reviews, admin, plans, ai) for maintainability.",
+    "/api/public/translate-menu is unauthenticated and triggers a paid LLM call on cache miss — attacker can flood arbitrary lang codes to burn credits and pollute db.menu_translations. Add rate-limiting + lang whitelist.",
+    "Translation cache has no invalidation hook — stale translations persist across menu edits.",
+    "/api/plans is hardcoded Python list; consider moving to a db collection or config file so plan prices can be edited without a deploy.",
+    "DEFAULT_CURRENCY env variable value uses non-ASCII '₹' — works because .env is UTF-8 and python-dotenv preserves it, but any deploy tool that mishandles unicode env vars could silently ship '$' instead. Consider using ISO code 'INR' internally and mapping to symbol at render time."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (appended TestPlatformConfig, TestPlansPricing, TestDefaultCurrencyOnRegister, TestPlanStatus, TestTranslateMenu — 14 new cases)",
+    "/app/test_reports/pytest/pytest_results.xml (regenerated)"
+  ],
+  "success_rate": {"backend": "98.8% (80/81) — 100% (14/14) for iter-4 new features; the 1 failure is a pre-existing image-fixture issue unrelated to this iteration.", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Admin: aadilrandhnpara12@gmail.com / Admin@12345 — working. Owners created per xdist worker as TEST_owner_<hex>@example.com and cascade-deleted.",
+  "seed_data_creation": "Ephemeral only. TestDefaultCurrencyOnRegister creates a throwaway owner (TEST_curr_<hex>) and self-deletes via admin at test end. TestPlanStatus mutates owner_ctx plan_expires_at (harmless — owner is deleted in TestCleanupCascade). TestTranslateMenu populates db.menu_translations for the per-worker restaurant; those entries are orphaned when the restaurant is deleted (minor cleanup gap — main agent could add cascade delete for menu_translations in admin_delete_user, currently missed).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter-4 backend features verified. The one persistent failing test (TestAIMenuFromPhoto.test_menu_from_photo_success_shape) has been failing across iterations because Claude Vision refuses a 1x1 PNG — this is a TEST FIXTURE issue, not a code bug. Either replace the fixture image with a real photo or make the endpoint return 400 for that specific vision error. admin_delete_user in server.py cascade-deletes categories/items/tables/orders but NOT menu_translations, coupons, reviews — potential cleanup gap.",
+  "rca of the issue": "TestAIMenuFromPhoto.test_menu_from_photo_success_shape RCA: The test posts a hard-coded 1x1 pixel PNG. Claude Sonnet 4.6 (via LiteLLM/Anthropic API) rejects images that are too small to contain meaningful content with error 'Could not process image', which server.py surfaces as HTTP 500. Fix option A (test-only): use a real menu photo bytes fixture. Fix option B (server): wrap the Claude vision call in try/except targeting BadRequestError from vision and return HTTPException(400, 'Image could not be processed by AI'). Reproduction: POST multipart/form-data 1x1 PNG (89504E47...42 60 82 hex) to /api/ai/menu-from-photo with owner auth -> 500."
+}

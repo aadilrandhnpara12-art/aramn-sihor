@@ -31,6 +31,8 @@ JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGO = "HS256"
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 APP_NAME = os.environ.get('APP_NAME', 'menu-maker')
+PLATFORM_WHATSAPP = os.environ.get('PLATFORM_WHATSAPP', '917226978918')
+DEFAULT_CURRENCY = os.environ.get('DEFAULT_CURRENCY', '₹')
 
 app = FastAPI(title="Menu Maker SaaS")
 api = APIRouter(prefix="/api")
@@ -368,7 +370,7 @@ async def register(body: RegisterRequest, response: Response):
         "theme": "warm",
         "accent_color": "#C2410C",
         "social": {},
-        "currency": "$",
+        "currency": DEFAULT_CURRENCY,
         "gst_percent": 0,
         "service_charge_percent": 0,
         "delivery_charge": 0,
@@ -498,7 +500,7 @@ async def google_session(request: Request, response: Response):
             "tagline": "", "address": "", "phone": "", "whatsapp": "",
             "business_hours": "Mon-Sun 9:00 - 22:00", "is_open": True,
             "logo_url": None, "banner_url": None, "google_map": "",
-            "theme": "warm", "accent_color": "#C2410C", "social": {}, "currency": "$",
+            "theme": "warm", "accent_color": "#C2410C", "social": {}, "currency": DEFAULT_CURRENCY,
             "gst_percent": 0, "service_charge_percent": 0, "delivery_charge": 0, "min_order": 0,
             "offer_banner": "", "offer_banner_active": False, "gallery": [], "about_us": "",
             "accept_dine_in": True, "accept_takeaway": True, "accept_delivery": False,
@@ -1221,16 +1223,123 @@ async def list_plans():
         {"id": "free", "name": "Free", "price": 0, "period": "forever", "features": [
             "1 restaurant", "20 menu items", "5 tables", "WhatsApp orders", "QR download PNG"
         ], "cta": "Start free"},
-        {"id": "starter", "name": "Starter", "price": 9, "period": "month", "features": [
+        {"id": "starter", "name": "Starter", "price": 799, "period": "month", "features": [
             "Unlimited items", "20 tables", "Analytics", "Custom colors", "QR PNG + SVG"
-        ], "cta": "Contact sales"},
-        {"id": "premium", "name": "Premium", "price": 19, "period": "month", "features": [
+        ], "cta": "Pay via WhatsApp"},
+        {"id": "premium", "name": "Premium", "price": 1499, "period": "month", "features": [
             "Everything in Starter", "AI descriptions", "Unlimited tables", "Priority support", "QR PDF poster"
-        ], "cta": "Contact sales", "popular": True},
-        {"id": "business", "name": "Business", "price": 39, "period": "month", "features": [
+        ], "cta": "Pay via WhatsApp", "popular": True},
+        {"id": "business", "name": "Business", "price": 2999, "period": "month", "features": [
             "Multi-location", "Custom domain", "API access", "White-label", "Dedicated manager"
-        ], "cta": "Contact sales"},
+        ], "cta": "Pay via WhatsApp"},
     ]
+
+
+@api.get("/platform-config")
+async def platform_config():
+    return {"whatsapp": PLATFORM_WHATSAPP, "currency": DEFAULT_CURRENCY}
+
+
+@api.get("/plan/status")
+async def plan_status(user: dict = Depends(get_current_user)):
+    if user.get("role") == "admin":
+        return {"plan": "admin", "expires_at": None, "days_remaining": None, "status": "active", "expired": False, "expiring_soon": False}
+    plan = user.get("plan", "free")
+    exp = user.get("plan_expires_at")
+    if not exp:
+        return {"plan": plan, "expires_at": None, "days_remaining": None, "status": "active", "expired": False, "expiring_soon": False}
+    try:
+        expires = datetime.fromisoformat(exp)
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+    except Exception:
+        return {"plan": plan, "expires_at": exp, "days_remaining": None, "status": "unknown", "expired": False, "expiring_soon": False}
+    delta = expires - datetime.now(timezone.utc)
+    days = int(delta.total_seconds() // 86400)
+    expired = days < 0
+    expiring_soon = 0 <= days <= 5
+    return {
+        "plan": plan, "expires_at": exp, "days_remaining": max(days, 0),
+        "status": "expired" if expired else "active",
+        "expired": expired, "expiring_soon": expiring_soon,
+        "renewal_whatsapp": PLATFORM_WHATSAPP,
+    }
+
+
+@api.get("/public/translate-menu/{slug}")
+async def public_translate_menu(slug: str, lang: str):
+    """Translate a restaurant's menu into target language using AI. Cached per (restaurant, lang)."""
+    if lang == "en":
+        return {"lang": "en", "translations": {}}
+    r = await db.restaurants.find_one({"slug": slug}, {"_id": 0, "restaurant_id": 1})
+    if not r:
+        raise HTTPException(404, "Restaurant not found")
+    # Try cache
+    cached = await db.menu_translations.find_one({"restaurant_id": r["restaurant_id"], "lang": lang}, {"_id": 0})
+    if cached and cached.get("translations"):
+        return {"lang": lang, "translations": cached["translations"], "cached": True}
+
+    # Fetch items + cats + about
+    cats = await db.categories.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).to_list(500)
+    items = await db.menu_items.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).to_list(2000)
+    restaurant = await db.restaurants.find_one({"restaurant_id": r["restaurant_id"]}, {"_id": 0})
+
+    lang_map = {"hi": "Hindi", "es": "Spanish", "fr": "French", "ar": "Arabic", "de": "German", "zh": "Chinese", "ta": "Tamil", "bn": "Bengali", "mr": "Marathi", "te": "Telugu", "gu": "Gujarati"}
+    target = lang_map.get(lang, lang)
+
+    payload = {
+        "tagline": restaurant.get("tagline") or "",
+        "about_us": restaurant.get("about_us") or "",
+        "categories": [{"id": c["category_id"], "name": c["name"]} for c in cats],
+        "items": [{"id": i["item_id"], "name": i["name"], "description": i.get("description") or ""} for i in items],
+    }
+
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(500, f"LLM lib missing: {e}")
+    import json as _json
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"trans-menu-{r['restaurant_id']}-{lang}",
+        system_message=(
+            f"You are a professional restaurant translator. Translate the given menu content into {target}. "
+            "Preserve the JSON structure exactly. Translate 'tagline', 'about_us', each category 'name', and each item 'name' and 'description'. "
+            "Keep ids unchanged. Return ONLY the JSON — no code fences, no explanation."
+        ),
+    ).with_model("anthropic", "claude-sonnet-4-6")
+    try:
+        text = await chat.send_message(UserMessage(text=_json.dumps(payload, ensure_ascii=False)))
+    except Exception as e:
+        raise HTTPException(500, f"AI translation error: {e}")
+
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.startswith("json"):
+            raw = raw[4:]
+    l = raw.find("{"); rp = raw.rfind("}")
+    if l >= 0 and rp > l:
+        raw = raw[l:rp+1]
+    try:
+        parsed = _json.loads(raw)
+    except Exception:
+        raise HTTPException(500, "Translation format error")
+
+    translations = {
+        "tagline": parsed.get("tagline") or "",
+        "about_us": parsed.get("about_us") or "",
+        "categories": {c["id"]: c["name"] for c in parsed.get("categories", []) if c.get("id")},
+        "items": {i["id"]: {"name": i.get("name") or "", "description": i.get("description") or ""} for i in parsed.get("items", []) if i.get("id")},
+    }
+    await db.menu_translations.update_one(
+        {"restaurant_id": r["restaurant_id"], "lang": lang},
+        {"$set": {"translations": translations, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"lang": lang, "translations": translations, "cached": False}
 
 
 # ---------- Health ----------

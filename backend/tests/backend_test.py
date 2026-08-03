@@ -836,6 +836,154 @@ class TestBulkItems:
             pass
 
 
+# ---------- NEW iter-4: platform config ----------
+class TestPlatformConfig:
+    def test_platform_config(self):
+        r = requests.get(f"{API}/platform-config")
+        assert r.status_code == 200
+        j = r.json()
+        assert j.get("whatsapp") == "917226978918"
+        assert j.get("currency") == "₹"
+
+
+# ---------- NEW iter-4: plans catalog INR pricing ----------
+class TestPlansPricing:
+    def test_plans_prices(self):
+        r = requests.get(f"{API}/plans")
+        assert r.status_code == 200
+        plans = {p["id"]: p for p in r.json()}
+        assert plans["free"]["price"] == 0
+        assert plans["starter"]["price"] == 799
+        assert plans["premium"]["price"] == 1499
+        assert plans["business"]["price"] == 2999
+
+
+# ---------- NEW iter-4: default currency on register ----------
+class TestDefaultCurrencyOnRegister:
+    def test_new_restaurant_currency_is_inr(self):
+        unique = uuid.uuid4().hex[:8]
+        s = requests.Session()
+        r = s.post(f"{API}/auth/register", json={
+            "email": f"TEST_curr_{unique}@example.com",
+            "password": "OwnerPass123!",
+            "name": f"TEST Curr {unique}",
+            "restaurant_name": f"TEST CurrDiner {unique}",
+        })
+        assert r.status_code == 200, r.text
+        tok = r.json()["token"]
+        uid = r.json()["user_id"]
+        slug = r.json()["restaurant_slug"]
+        s.headers.update({"Authorization": f"Bearer {tok}"})
+        pub = requests.get(f"{API}/public/restaurant/{slug}")
+        assert pub.status_code == 200
+        assert pub.json()["restaurant"].get("currency") == "₹"
+        # cleanup
+        try:
+            adm = requests.Session()
+            lg = adm.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+            adm.headers.update({"Authorization": f"Bearer {lg.json()['token']}"})
+            adm.delete(f"{API}/admin/users/{uid}")
+        except Exception:
+            pass
+
+
+# ---------- NEW iter-4: plan status ----------
+class TestPlanStatus:
+    def test_requires_auth(self):
+        r = requests.get(f"{API}/plan/status")
+        assert r.status_code == 401
+
+    def test_admin_plan_status(self, admin_client):
+        r = admin_client.get(f"{API}/plan/status")
+        assert r.status_code == 200
+        j = r.json()
+        assert j["plan"] == "admin"
+        assert j["expired"] is False
+
+    def test_owner_plan_status_default(self, owner_ctx):
+        r = owner_ctx["session"].get(f"{API}/plan/status")
+        assert r.status_code == 200
+        j = r.json()
+        assert "plan" in j
+        assert "days_remaining" in j
+        assert "expired" in j
+        assert "expiring_soon" in j
+        assert j.get("renewal_whatsapp") == "917226978918"
+
+    def test_owner_plan_expired(self, admin_client, owner_ctx):
+        # set plan_expires_at 5 days in past via admin
+        r = admin_client.patch(f"{API}/admin/users/{owner_ctx['user_id']}/plan",
+                               json={"plan": "starter", "days": -5})
+        assert r.status_code == 200
+        r2 = owner_ctx["session"].get(f"{API}/plan/status")
+        assert r2.status_code == 200
+        j = r2.json()
+        assert j["expired"] is True
+        assert j["status"] == "expired"
+
+    def test_owner_plan_expiring_soon(self, admin_client, owner_ctx):
+        r = admin_client.patch(f"{API}/admin/users/{owner_ctx['user_id']}/plan",
+                               json={"plan": "starter", "days": 3})
+        assert r.status_code == 200
+        r2 = owner_ctx["session"].get(f"{API}/plan/status")
+        assert r2.status_code == 200
+        j = r2.json()
+        assert j["expired"] is False
+        assert j["expiring_soon"] is True
+        assert 0 <= j["days_remaining"] <= 5
+
+
+# ---------- NEW iter-4: public translate menu ----------
+class TestTranslateMenu:
+    def test_translate_en_returns_empty(self, owner_ctx):
+        r = requests.get(f"{API}/public/translate-menu/{owner_ctx['slug']}?lang=en", timeout=30)
+        assert r.status_code == 200
+        j = r.json()
+        assert j["lang"] == "en"
+        assert j["translations"] == {}
+
+    def test_translate_404_bad_slug(self):
+        r = requests.get(f"{API}/public/translate-menu/nonexistent-xyz-999?lang=hi", timeout=30)
+        assert r.status_code == 404
+
+    def test_translate_hindi_and_cache(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.get(f"{API}/public/translate-menu/{slug}?lang=hi", timeout=45)
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["lang"] == "hi"
+        tr = j["translations"]
+        assert isinstance(tr, dict)
+        # structure check
+        assert "tagline" in tr
+        assert "about_us" in tr
+        assert "categories" in tr and isinstance(tr["categories"], dict)
+        assert "items" in tr and isinstance(tr["items"], dict)
+        # Item values should have name + description
+        if tr["items"]:
+            first = next(iter(tr["items"].values()))
+            assert "name" in first and "description" in first
+        # 2nd call should be cached
+        r2 = requests.get(f"{API}/public/translate-menu/{slug}?lang=hi", timeout=30)
+        assert r2.status_code == 200
+        assert r2.json().get("cached") is True
+
+    def test_translate_spanish(self, owner_ctx):
+        r = requests.get(f"{API}/public/translate-menu/{owner_ctx['slug']}?lang=es", timeout=45)
+        assert r.status_code == 200
+        assert isinstance(r.json()["translations"], dict)
+
+    def test_translate_french(self, owner_ctx):
+        r = requests.get(f"{API}/public/translate-menu/{owner_ctx['slug']}?lang=fr", timeout=45)
+        assert r.status_code == 200
+        assert isinstance(r.json()["translations"], dict)
+
+    def test_translate_tamil(self, owner_ctx):
+        r = requests.get(f"{API}/public/translate-menu/{owner_ctx['slug']}?lang=ta", timeout=45)
+        assert r.status_code == 200
+        assert isinstance(r.json()["translations"], dict)
+
+
 # ---------- Cleanup: cascade delete ----------
 class TestCleanupCascade:
     def test_delete_user_cascade(self, admin_client, owner_ctx):

@@ -35,7 +35,8 @@ export default function PublicMenu() {
   const [quickView, setQuickView] = useState(null);
   const [showTop, setShowTop] = useState(false);
   const [lang, setLang] = useState("en");
-  const [translations, setTranslations] = useState({}); // key: itemId, value: {name, description}
+  const [translations, setTranslations] = useState({});
+  const [translating, setTranslating] = useState(false);
   const scrollRefs = useRef({});
 
   useEffect(() => {
@@ -46,17 +47,46 @@ export default function PublicMenu() {
     return () => window.removeEventListener("scroll", onScroll);
   }, [slug, table]);
 
+  // Load / apply translation when language changes
+  useEffect(() => {
+    if (!data || data.error) return;
+    if (lang === "en") { setTranslations({}); return; }
+    if (translations[lang]) return; // already loaded
+    setTranslating(true);
+    api.get(`/public/translate-menu/${slug}`, { params: { lang } })
+      .then((r) => {
+        setTranslations((prev) => ({ ...prev, [lang]: r.data.translations }));
+        toast.success("Menu translated");
+      })
+      .catch(() => toast.error("Translation unavailable"))
+      .finally(() => setTranslating(false));
+  }, [lang, data, slug]);
+
+  // Helper to get translated string
+  const t = (key, id, field, fallback) => {
+    if (lang === "en") return fallback;
+    const tr = translations[lang];
+    if (!tr) return fallback;
+    if (key === "tagline") return tr.tagline || fallback;
+    if (key === "about") return tr.about_us || fallback;
+    if (key === "category") return (tr.categories || {})[id] || fallback;
+    if (key === "item") return ((tr.items || {})[id] || {})[field] || fallback;
+    return fallback;
+  };
+
   const grouped = useMemo(() => {
     if (!data?.items) return [];
     const search = q.trim().toLowerCase();
     return data.categories.map((c) => ({
       ...c,
+      _tname: t("category", c.category_id, null, c.name),
       items: data.items.filter((i) =>
         i.category_id === c.category_id && i.available &&
         (!search || i.name.toLowerCase().includes(search) || (i.description||"").toLowerCase().includes(search))
       ),
     })).filter((c) => c.items.length > 0);
-  }, [data, q]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, q, lang, translations]);
 
   const bestsellers = useMemo(() => (data?.items || []).filter((i) => i.bestseller && i.available).slice(0, 6), [data]);
 
@@ -134,7 +164,7 @@ export default function PublicMenu() {
                 <h1 className="display font-semibold text-4xl sm:text-6xl text-white leading-none tracking-tight">
                   {r.name}
                 </h1>
-                {r.tagline && <div className="text-white/90 text-sm sm:text-base mt-2 serif-italic display">{r.tagline}</div>}
+                {r.tagline && <div className="text-white/90 text-sm sm:text-base mt-2 serif-italic display">{t("tagline", null, null, r.tagline)}</div>}
               </div>
             </div>
           </div>
@@ -150,8 +180,9 @@ export default function PublicMenu() {
             <div className="ml-auto flex items-center gap-1 pl-4 border-l border-ink-200">
               <Translate size={14} className="text-ink-500" />
               {LANGS.map((l) => (
-                <button key={l.code} onClick={()=>setLang(l.code)} data-testid={`lang-${l.code}`} className={`px-2 py-1 rounded-md text-xs font-medium ${lang === l.code ? "bg-ink-900 text-white" : "text-ink-600 hover:text-ink-900"}`}>{l.label}</button>
+                <button key={l.code} onClick={()=>setLang(l.code)} data-testid={`lang-${l.code}`} disabled={translating && lang !== l.code} className={`px-2 py-1 rounded-md text-xs font-medium ${lang === l.code ? "bg-ink-900 text-white" : "text-ink-600 hover:text-ink-900"}`}>{l.label}</button>
               ))}
+              {translating && <div className="w-3 h-3 border border-clay-300 border-t-clay-600 rounded-full animate-spin ml-1" />}
             </div>
           </div>
         </div>
@@ -180,7 +211,7 @@ export default function PublicMenu() {
             {r.about_us && (
               <div className="hidden lg:block bg-white border border-ink-200 rounded-2xl p-5">
                 <div className="overline mb-3">About</div>
-                <p className="display serif-italic text-ink-800 leading-relaxed text-lg">{r.about_us}</p>
+                <p className="display serif-italic text-ink-800 leading-relaxed text-lg">{t("about", null, null, r.about_us)}</p>
               </div>
             )}
           </aside>
@@ -190,7 +221,7 @@ export default function PublicMenu() {
             {r.about_us && (
               <div className="lg:hidden bg-white border border-ink-200 rounded-2xl p-5">
                 <div className="overline mb-2">About</div>
-                <p className="display serif-italic text-ink-800 leading-relaxed">{r.about_us}</p>
+                <p className="display serif-italic text-ink-800 leading-relaxed">{t("about", null, null, r.about_us)}</p>
               </div>
             )}
 
@@ -199,7 +230,7 @@ export default function PublicMenu() {
               <section>
                 <div className="flex items-center gap-3 mb-5">
                   <Sparkle size={18} weight="fill" className="text-clay-600" />
-                  <h2 className="display font-semibold text-2xl text-ink-900">Chef's picks</h2>
+                  <h2 className="display font-semibold text-2xl text-ink-900">{t("category", "__cp__", null, "Chef's picks")}</h2>
                   <span className="flex-1 h-px bg-ink-200" />
                 </div>
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -210,8 +241,8 @@ export default function PublicMenu() {
                         <div className="absolute top-2 left-2 pill bg-amber-50 text-amber-800 border border-amber-200 text-[10px]">★ Bestseller</div>
                       </div>
                       <div className="p-4">
-                        <div className="display font-semibold text-lg text-ink-900 leading-tight">{it.name}</div>
-                        {it.description && <div className="text-sm text-ink-500 mt-1 line-clamp-2">{it.description}</div>}
+                        <div className="display font-semibold text-lg text-ink-900 leading-tight">{t("item", it.item_id, "name", it.name)}</div>
+                        {it.description && <div className="text-sm text-ink-500 mt-1 line-clamp-2">{t("item", it.item_id, "description", it.description)}</div>}
                         <div className="mt-3 flex items-center justify-between">
                           <div className="mono font-bold text-ink-900">{currency}{it.price}</div>
                           <span onClick={(e)=>{e.stopPropagation(); addToCart(it);}} data-testid={`best-add-${it.item_id}`} className="pill bg-clay-600 text-white hover:bg-clay-700 cursor-pointer"><Plus size={11} weight="bold" /> Add</span>
@@ -227,13 +258,16 @@ export default function PublicMenu() {
             {grouped.map((c) => (
               <section key={c.category_id} ref={(el) => (scrollRefs.current[c.category_id] = el)} data-testid={`section-${c.category_id}`}>
                 <div className="flex items-baseline gap-4 mb-6">
-                  <h2 className="display font-semibold text-3xl text-ink-900 tracking-tight">{c.name}</h2>
+                  <h2 className="display font-semibold text-3xl text-ink-900 tracking-tight">{c._tname}</h2>
                   <span className="mono text-xs text-ink-500 mb-1">{c.items.length} items</span>
                   <span className="flex-1 h-px bg-ink-200" />
                 </div>
                 <div className="grid sm:grid-cols-2 gap-4">
                   {c.items.map((it) => (
-                    <ItemCard key={it.item_id} it={it} currency={currency} onAdd={()=>addToCart(it)} onOpen={()=>setQuickView(it)} lang={lang} translation={translations[it.item_id]} />
+                    <ItemCard key={it.item_id} it={it} currency={currency} onAdd={()=>addToCart(it)} onOpen={()=>setQuickView(it)}
+                      displayName={t("item", it.item_id, "name", it.name)}
+                      displayDesc={t("item", it.item_id, "description", it.description || "")}
+                    />
                   ))}
                 </div>
               </section>
@@ -308,11 +342,11 @@ export default function PublicMenu() {
   );
 }
 
-function ItemCard({ it, currency, onAdd, onOpen, lang, translation }) {
+function ItemCard({ it, currency, onAdd, onOpen, displayName, displayDesc }) {
   return (
     <div className="bg-white border border-ink-200 rounded-2xl overflow-hidden flex sm:flex-col hover:border-ink-400 transition-all hover:-translate-y-0.5" data-testid={`public-item-${it.item_id}`}>
       <button onClick={onOpen} className="w-28 sm:w-full h-28 sm:h-48 bg-clay-50 relative flex-shrink-0">
-        {it.image_url ? <img src={`${BACKEND_URL}${it.image_url}`} className="w-full h-full object-cover" alt={it.name} /> : <div className="w-full h-full grid place-items-center text-clay-300"><ImageSquare size={30} weight="regular" /></div>}
+        {it.image_url ? <img src={`${BACKEND_URL}${it.image_url}`} className="w-full h-full object-cover" alt={displayName} /> : <div className="w-full h-full grid place-items-center text-clay-300"><ImageSquare size={30} weight="regular" /></div>}
         <div className="absolute top-2 left-2 flex gap-1">
           <span className={`w-4 h-4 border-2 grid place-items-center bg-white ${it.veg ? "border-moss-600" : "border-clay-600"}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${it.veg ? "bg-moss-600" : "bg-clay-600"}`} />
@@ -323,8 +357,8 @@ function ItemCard({ it, currency, onAdd, onOpen, lang, translation }) {
       </button>
       <div className="p-4 flex-1 flex flex-col">
         <button onClick={onOpen} className="text-left flex-1">
-          <div className="display font-semibold text-lg text-ink-900 leading-tight">{it.name}</div>
-          {it.description && <div className="text-sm text-ink-500 mt-1 line-clamp-2">{it.description}</div>}
+          <div className="display font-semibold text-lg text-ink-900 leading-tight">{displayName}</div>
+          {displayDesc && <div className="text-sm text-ink-500 mt-1 line-clamp-2">{displayDesc}</div>}
         </button>
         <div className="mt-3 flex items-center justify-between">
           <div className="mono font-bold text-ink-900">{currency}{it.price}</div>
