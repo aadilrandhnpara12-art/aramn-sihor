@@ -1249,7 +1249,7 @@ async def admin_list_plans(admin: dict = Depends(require_admin)):
 
 
 @api.patch("/admin/plans/{plan_id}")
-async def admin_update_plan(plan_id: str, request: Request, admin: dict = Depends(require_admin)):
+async def admin_update_plan_catalog(plan_id: str, request: Request, admin: dict = Depends(require_admin)):
     body = await request.json()
     allowed = {"name", "price", "period", "features", "cta", "popular", "order"}
     updates = {k: v for k, v in body.items() if k in allowed and v is not None}
@@ -1263,7 +1263,7 @@ async def admin_update_plan(plan_id: str, request: Request, admin: dict = Depend
 
 
 @api.post("/admin/plans")
-async def admin_create_plan(request: Request, admin: dict = Depends(require_admin)):
+async def admin_create_plan_catalog(request: Request, admin: dict = Depends(require_admin)):
     body = await request.json()
     pid = str(body.get("id", "")).strip().lower()
     if not pid:
@@ -1286,7 +1286,7 @@ async def admin_create_plan(request: Request, admin: dict = Depends(require_admi
 
 
 @api.delete("/admin/plans/{plan_id}")
-async def admin_delete_plan(plan_id: str, admin: dict = Depends(require_admin)):
+async def admin_delete_plan_catalog(plan_id: str, admin: dict = Depends(require_admin)):
     if plan_id == "free":
         raise HTTPException(400, "Cannot delete Free plan")
     await db.plans.delete_one({"id": plan_id})
