@@ -328,6 +328,25 @@ async def startup():
     # Init storage (non-blocking)
     init_storage()
 
+    # Seed default plans if empty
+    if await db.plans.count_documents({}) == 0:
+        default_plans = [
+            {"id": "free", "name": "Free", "price": 0, "period": "forever", "features": [
+                "1 restaurant", "20 menu items", "5 tables", "WhatsApp orders", "QR download PNG"
+            ], "cta": "Start free", "popular": False, "order": 1},
+            {"id": "starter", "name": "Starter", "price": 799, "period": "month", "features": [
+                "Unlimited items", "20 tables", "Analytics", "Custom colors", "QR PNG + SVG"
+            ], "cta": "Pay via WhatsApp", "popular": False, "order": 2},
+            {"id": "premium", "name": "Premium", "price": 1499, "period": "month", "features": [
+                "Everything in Starter", "AI descriptions", "Unlimited tables", "Priority support", "QR PDF poster"
+            ], "cta": "Pay via WhatsApp", "popular": True, "order": 3},
+            {"id": "business", "name": "Business", "price": 2999, "period": "month", "features": [
+                "Multi-location", "Custom domain", "API access", "White-label", "Dedicated manager"
+            ], "cta": "Pay via WhatsApp", "popular": False, "order": 4},
+        ]
+        await db.plans.insert_many(default_plans)
+        logger.info(f"Seeded {len(default_plans)} default plans")
+
 
 # ---------- Auth Routes ----------
 @api.post("/auth/register")
@@ -1219,20 +1238,59 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
 # ---------- Plans catalog (public) ----------
 @api.get("/plans")
 async def list_plans():
-    return [
-        {"id": "free", "name": "Free", "price": 0, "period": "forever", "features": [
-            "1 restaurant", "20 menu items", "5 tables", "WhatsApp orders", "QR download PNG"
-        ], "cta": "Start free"},
-        {"id": "starter", "name": "Starter", "price": 799, "period": "month", "features": [
-            "Unlimited items", "20 tables", "Analytics", "Custom colors", "QR PNG + SVG"
-        ], "cta": "Pay via WhatsApp"},
-        {"id": "premium", "name": "Premium", "price": 1499, "period": "month", "features": [
-            "Everything in Starter", "AI descriptions", "Unlimited tables", "Priority support", "QR PDF poster"
-        ], "cta": "Pay via WhatsApp", "popular": True},
-        {"id": "business", "name": "Business", "price": 2999, "period": "month", "features": [
-            "Multi-location", "Custom domain", "API access", "White-label", "Dedicated manager"
-        ], "cta": "Pay via WhatsApp"},
-    ]
+    plans = await db.plans.find({}, {"_id": 0}).sort("order", 1).to_list(50)
+    return plans
+
+
+@api.get("/admin/plans")
+async def admin_list_plans(admin: dict = Depends(require_admin)):
+    plans = await db.plans.find({}, {"_id": 0}).sort("order", 1).to_list(50)
+    return plans
+
+
+@api.patch("/admin/plans/{plan_id}")
+async def admin_update_plan(plan_id: str, request: Request, admin: dict = Depends(require_admin)):
+    body = await request.json()
+    allowed = {"name", "price", "period", "features", "cta", "popular", "order"}
+    updates = {k: v for k, v in body.items() if k in allowed and v is not None}
+    if not updates:
+        raise HTTPException(400, "Nothing to update")
+    res = await db.plans.update_one({"id": plan_id}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Plan not found")
+    doc = await db.plans.find_one({"id": plan_id}, {"_id": 0})
+    return doc
+
+
+@api.post("/admin/plans")
+async def admin_create_plan(request: Request, admin: dict = Depends(require_admin)):
+    body = await request.json()
+    pid = str(body.get("id", "")).strip().lower()
+    if not pid:
+        raise HTTPException(400, "id required")
+    if await db.plans.find_one({"id": pid}):
+        raise HTTPException(400, "Plan id already exists")
+    doc = {
+        "id": pid,
+        "name": body.get("name", pid.title()),
+        "price": float(body.get("price", 0)),
+        "period": body.get("period", "month"),
+        "features": body.get("features", []),
+        "cta": body.get("cta", "Contact sales"),
+        "popular": bool(body.get("popular", False)),
+        "order": int(body.get("order", 99)),
+    }
+    await db.plans.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/admin/plans/{plan_id}")
+async def admin_delete_plan(plan_id: str, admin: dict = Depends(require_admin)):
+    if plan_id == "free":
+        raise HTTPException(400, "Cannot delete Free plan")
+    await db.plans.delete_one({"id": plan_id})
+    return {"ok": True}
 
 
 @api.get("/platform-config")

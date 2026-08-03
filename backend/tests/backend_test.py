@@ -849,13 +849,18 @@ class TestPlatformConfig:
 # ---------- NEW iter-4: plans catalog INR pricing ----------
 class TestPlansPricing:
     def test_plans_prices(self):
+        # NOTE (iter-5): plans are now editable via /api/admin/plans, so exact
+        # prices are no longer stable. We assert structure + free==0 only.
         r = requests.get(f"{API}/plans")
         assert r.status_code == 200
         plans = {p["id"]: p for p in r.json()}
+        for pid in ("free", "starter", "premium", "business"):
+            assert pid in plans
+            assert isinstance(plans[pid]["price"], (int, float))
         assert plans["free"]["price"] == 0
-        assert plans["starter"]["price"] == 799
-        assert plans["premium"]["price"] == 1499
-        assert plans["business"]["price"] == 2999
+        assert plans["starter"]["price"] > 0
+        assert plans["premium"]["price"] > plans["starter"]["price"]
+        assert plans["business"]["price"] >= plans["premium"]["price"]
 
 
 # ---------- NEW iter-4: default currency on register ----------
@@ -982,6 +987,179 @@ class TestTranslateMenu:
         r = requests.get(f"{API}/public/translate-menu/{owner_ctx['slug']}?lang=ta", timeout=45)
         assert r.status_code == 200
         assert isinstance(r.json()["translations"], dict)
+
+
+# ---------- NEW iter-5: Admin plan catalog CRUD ----------
+class TestAdminPlanCatalog:
+    def _tid(self):
+        return f"test_admin_plan_{uuid.uuid4().hex[:8]}"
+
+    def test_public_plans_seeded(self):
+        r = requests.get(f"{API}/plans")
+        assert r.status_code == 200
+        plans = r.json()
+        assert isinstance(plans, list) and len(plans) >= 4
+        # sorted by order
+        orders = [p.get("order") for p in plans]
+        assert orders == sorted(orders)
+        ids = {p["id"] for p in plans}
+        assert {"free", "starter", "premium", "business"}.issubset(ids)
+        for p in plans:
+            assert "_id" not in p
+
+    def test_admin_list_plans(self, admin_client):
+        r = admin_client.get(f"{API}/admin/plans")
+        assert r.status_code == 200
+        plans = r.json()
+        assert isinstance(plans, list) and len(plans) >= 4
+        for p in plans:
+            for k in ("id", "name", "price", "features"):
+                assert k in p
+            assert "_id" not in p
+
+    def test_admin_list_plans_requires_auth(self):
+        r = requests.get(f"{API}/admin/plans")
+        assert r.status_code == 401
+
+    def test_admin_list_plans_owner_403(self, owner_ctx):
+        r = owner_ctx["session"].get(f"{API}/admin/plans")
+        assert r.status_code == 403
+
+    def test_create_plan_success(self, admin_client):
+        pid = self._tid()
+        r = admin_client.post(f"{API}/admin/plans", json={
+            "id": pid, "name": "Test Plan", "price": 499,
+            "period": "month", "features": ["A", "B"], "cta": "Buy now",
+            "popular": False, "order": 50,
+        })
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["id"] == pid
+        assert j["name"] == "Test Plan"
+        assert j["price"] == 499
+        assert j["features"] == ["A", "B"]
+        assert "_id" not in j
+        # verify via GET admin list
+        r2 = admin_client.get(f"{API}/admin/plans")
+        ids = {p["id"] for p in r2.json()}
+        assert pid in ids
+        # cleanup
+        admin_client.delete(f"{API}/admin/plans/{pid}")
+
+    def test_create_plan_missing_id_400(self, admin_client):
+        r = admin_client.post(f"{API}/admin/plans", json={"name": "NoId", "price": 10})
+        assert r.status_code == 400
+
+    def test_create_plan_duplicate_id_400(self, admin_client):
+        pid = self._tid()
+        r1 = admin_client.post(f"{API}/admin/plans", json={"id": pid, "name": "P", "price": 1})
+        assert r1.status_code == 200
+        r2 = admin_client.post(f"{API}/admin/plans", json={"id": pid, "name": "P2", "price": 2})
+        assert r2.status_code == 400
+        admin_client.delete(f"{API}/admin/plans/{pid}")
+
+    def test_create_plan_owner_403(self, owner_ctx):
+        pid = self._tid()
+        r = owner_ctx["session"].post(f"{API}/admin/plans", json={"id": pid, "name": "X", "price": 1})
+        assert r.status_code == 403
+
+    def test_create_plan_anon_401(self):
+        pid = self._tid()
+        r = requests.post(f"{API}/admin/plans", json={"id": pid, "name": "X", "price": 1})
+        assert r.status_code == 401
+
+    def test_update_plan_success(self, admin_client):
+        pid = self._tid()
+        c = admin_client.post(f"{API}/admin/plans", json={"id": pid, "name": "Orig", "price": 100, "features": ["x"]})
+        assert c.status_code == 200
+        # update multiple editable fields
+        u = admin_client.patch(f"{API}/admin/plans/{pid}", json={
+            "name": "Renamed", "price": 250, "period": "year",
+            "features": ["a", "b", "c"], "cta": "Get it", "popular": True, "order": 77,
+        })
+        assert u.status_code == 200, u.text
+        j = u.json()
+        assert j["name"] == "Renamed"
+        assert j["price"] == 250
+        assert j["period"] == "year"
+        assert j["features"] == ["a", "b", "c"]
+        assert j["cta"] == "Get it"
+        assert j["popular"] is True
+        assert j["order"] == 77
+        assert "_id" not in j
+        # verify persisted
+        rl = admin_client.get(f"{API}/admin/plans")
+        found = next(p for p in rl.json() if p["id"] == pid)
+        assert found["name"] == "Renamed"
+        assert found["price"] == 250
+        admin_client.delete(f"{API}/admin/plans/{pid}")
+
+    def test_update_plan_404(self, admin_client):
+        r = admin_client.patch(f"{API}/admin/plans/nonexistent_xyz_12345", json={"name": "x"})
+        assert r.status_code == 404
+
+    def test_update_plan_no_editable_400(self, admin_client):
+        # patch with only non-editable / unknown field
+        pid = self._tid()
+        admin_client.post(f"{API}/admin/plans", json={"id": pid, "name": "T", "price": 5})
+        r = admin_client.patch(f"{API}/admin/plans/{pid}", json={"garbage": 1, "id": "hack"})
+        assert r.status_code == 400
+        admin_client.delete(f"{API}/admin/plans/{pid}")
+
+    def test_update_plan_owner_403(self, owner_ctx):
+        r = owner_ctx["session"].patch(f"{API}/admin/plans/free", json={"name": "hack"})
+        assert r.status_code == 403
+
+    def test_update_plan_anon_401(self):
+        r = requests.patch(f"{API}/admin/plans/free", json={"name": "hack"})
+        assert r.status_code == 401
+
+    def test_delete_plan_success(self, admin_client):
+        pid = self._tid()
+        admin_client.post(f"{API}/admin/plans", json={"id": pid, "name": "ToDel", "price": 1})
+        r = admin_client.delete(f"{API}/admin/plans/{pid}")
+        assert r.status_code == 200
+        # verify gone
+        rl = admin_client.get(f"{API}/admin/plans")
+        ids = {p["id"] for p in rl.json()}
+        assert pid not in ids
+
+    def test_delete_free_plan_forbidden_400(self, admin_client):
+        r = admin_client.delete(f"{API}/admin/plans/free")
+        assert r.status_code == 400
+        # confirm free still present
+        rl = admin_client.get(f"{API}/admin/plans")
+        assert any(p["id"] == "free" for p in rl.json())
+
+    def test_delete_plan_owner_403(self, owner_ctx):
+        r = owner_ctx["session"].delete(f"{API}/admin/plans/starter")
+        assert r.status_code == 403
+
+    def test_delete_plan_anon_401(self):
+        r = requests.delete(f"{API}/admin/plans/starter")
+        assert r.status_code == 401
+
+
+# ---------- REGRESSION: user plan assignment still works ----------
+class TestUserPlanAssignmentRegression:
+    def test_user_plan_endpoint_still_works(self, admin_client, owner_ctx):
+        """PATCH /api/admin/users/{user_id}/plan should still assign a plan to a user
+        (separate from PATCH /api/admin/plans/{plan_id} catalog editing)."""
+        r = admin_client.patch(f"{API}/admin/users/{owner_ctx['user_id']}/plan",
+                               json={"plan": "business", "days": 60})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["plan"] == "business"
+        assert "expires_at" in j
+        # verify via /plan/status
+        r2 = owner_ctx["session"].get(f"{API}/plan/status")
+        assert r2.status_code == 200
+        assert r2.json()["plan"] == "business"
+
+    def test_user_plan_endpoint_404_unknown_user(self, admin_client):
+        r = admin_client.patch(f"{API}/admin/users/user_nonexistent_xyz/plan",
+                               json={"plan": "starter", "days": 30})
+        assert r.status_code == 404
 
 
 # ---------- Cleanup: cascade delete ----------
