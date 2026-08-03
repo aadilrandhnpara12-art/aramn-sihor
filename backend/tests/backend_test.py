@@ -47,6 +47,10 @@ def owner_ctx():
     data = r.json()
     tok = data["token"]
     s.headers.update({"Authorization": f"Bearer {tok}"})
+    # Pre-configure restaurant with whatsapp so WhatsApp URL is generated in public order tests
+    s.patch(f"{API}/restaurant/me", json={
+        "whatsapp": "+911234567890", "phone": "+911234567890",
+    })
     return {
         "session": s, "email": email, "password": password, "name": name,
         "restaurant_name": rname, "slug": data["restaurant_slug"],
@@ -366,6 +370,292 @@ class TestAdminManagement:
     def test_owner_cannot_access_admin(self, owner_ctx):
         r = owner_ctx["session"].get(f"{API}/admin/stats")
         assert r.status_code == 403
+
+
+# ---------- NEW: Coupons ----------
+class TestCoupons:
+    def test_create_coupon_percent(self, owner_ctx):
+        s = owner_ctx["session"]
+        r = s.post(f"{API}/coupons", json={
+            "code": "TESTPCT20", "kind": "percent", "value": 20,
+            "min_order": 10, "max_discount": 5, "active": True,
+        })
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["code"] == "TESTPCT20"
+        assert j["kind"] == "percent"
+        owner_ctx["coupon_id_pct"] = j["coupon_id"]
+
+    def test_create_coupon_flat(self, owner_ctx):
+        s = owner_ctx["session"]
+        r = s.post(f"{API}/coupons", json={
+            "code": "TESTFLAT3", "kind": "flat", "value": 3,
+            "min_order": 5, "active": True,
+        })
+        assert r.status_code == 200
+        owner_ctx["coupon_id_flat"] = r.json()["coupon_id"]
+
+    def test_duplicate_coupon_400(self, owner_ctx):
+        s = owner_ctx["session"]
+        r = s.post(f"{API}/coupons", json={
+            "code": "TESTPCT20", "kind": "flat", "value": 1,
+        })
+        assert r.status_code == 400
+
+    def test_list_coupons(self, owner_ctx):
+        s = owner_ctx["session"]
+        r = s.get(f"{API}/coupons")
+        assert r.status_code == 200
+        codes = {c["code"] for c in r.json()}
+        assert "TESTPCT20" in codes and "TESTFLAT3" in codes
+
+    def test_patch_coupon_toggle(self, owner_ctx):
+        s = owner_ctx["session"]
+        cid = owner_ctx["coupon_id_flat"]
+        r = s.patch(f"{API}/coupons/{cid}", json={"active": False})
+        assert r.status_code == 200
+        # validate returns 404 when inactive
+        slug = owner_ctx["slug"]
+        r2 = requests.get(f"{API}/public/coupons/{slug}/TESTFLAT3?subtotal=100")
+        assert r2.status_code == 404
+        # re-enable
+        s.patch(f"{API}/coupons/{cid}", json={"active": True})
+
+    def test_public_validate_percent_with_cap(self, owner_ctx):
+        # 20% of 100 = 20, but max_discount=5 -> 5
+        slug = owner_ctx["slug"]
+        r = requests.get(f"{API}/public/coupons/{slug}/TESTPCT20?subtotal=100")
+        assert r.status_code == 200
+        j = r.json()
+        assert j["discount"] == 5.0
+
+    def test_public_validate_percent_no_cap_hit(self, owner_ctx):
+        # 20% of 20 = 4 (< cap 5)
+        slug = owner_ctx["slug"]
+        r = requests.get(f"{API}/public/coupons/{slug}/TESTPCT20?subtotal=20")
+        assert r.status_code == 200
+        assert r.json()["discount"] == 4.0
+
+    def test_public_validate_flat(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.get(f"{API}/public/coupons/{slug}/TESTFLAT3?subtotal=50")
+        assert r.status_code == 200
+        assert r.json()["discount"] == 3.0
+
+    def test_public_validate_below_min(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        # TESTPCT20 requires min_order 10
+        r = requests.get(f"{API}/public/coupons/{slug}/TESTPCT20?subtotal=5")
+        assert r.status_code == 400
+
+    def test_public_validate_invalid(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.get(f"{API}/public/coupons/{slug}/NOSUCHCODE?subtotal=50")
+        assert r.status_code == 404
+
+    def test_delete_coupon(self, owner_ctx):
+        s = owner_ctx["session"]
+        cid = owner_ctx["coupon_id_flat"]
+        r = s.delete(f"{API}/coupons/{cid}")
+        assert r.status_code == 200
+        # confirm gone
+        r2 = s.get(f"{API}/coupons")
+        assert not any(c["coupon_id"] == cid for c in r2.json())
+
+
+# ---------- NEW: Reviews ----------
+class TestReviews:
+    def test_create_review_valid(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/reviews", json={
+            "restaurant_slug": slug, "customer_name": "Bob",
+            "rating": 5, "comment": "Awesome",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["rating"] == 5
+
+    def test_create_review_4(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/reviews", json={
+            "restaurant_slug": slug, "customer_name": "Carol",
+            "rating": 4, "comment": "Good",
+        })
+        assert r.status_code == 200
+
+    def test_create_review_invalid_rating(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/reviews", json={
+            "restaurant_slug": slug, "customer_name": "X",
+            "rating": 6, "comment": "",
+        })
+        assert r.status_code == 400
+        r2 = requests.post(f"{API}/public/reviews", json={
+            "restaurant_slug": slug, "customer_name": "X",
+            "rating": 0, "comment": "",
+        })
+        assert r2.status_code == 400
+
+    def test_public_reviews_list_and_avg(self, owner_ctx):
+        slug = owner_ctx["slug"]
+        r = requests.get(f"{API}/public/reviews/{slug}")
+        assert r.status_code == 200
+        j = r.json()
+        assert j["count"] >= 2
+        assert j["average"] > 0
+        # avg of 5 and 4 = 4.5
+        assert j["average"] == 4.5
+
+    def test_owner_reviews_auth(self, owner_ctx):
+        r = owner_ctx["session"].get(f"{API}/reviews")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list) and len(r.json()) >= 2
+
+    def test_owner_reviews_requires_auth(self):
+        r = requests.get(f"{API}/reviews")
+        assert r.status_code == 401
+
+    def test_public_restaurant_includes_reviews_summary(self, owner_ctx):
+        r = requests.get(f"{API}/public/restaurant/{owner_ctx['slug']}")
+        assert r.status_code == 200
+        j = r.json()
+        assert "reviews_summary" in j
+        assert j["reviews_summary"]["count"] >= 2
+        assert j["reviews_summary"]["average"] == 4.5
+
+
+# ---------- NEW: Restaurant Profile new fields ----------
+class TestRestaurantProfileNewFields:
+    def test_patch_new_fields(self, owner_ctx):
+        s = owner_ctx["session"]
+        payload = {
+            "about_us": "We serve fine food",
+            "gst_percent": 5,
+            "service_charge_percent": 10,
+            "delivery_charge": 4,
+            "min_order": 15,
+            "offer_banner": "20% off Fridays",
+            "offer_banner_active": True,
+            "gallery": ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+            "accept_dine_in": True,
+            "accept_takeaway": True,
+            "accept_delivery": True,
+        }
+        r = s.patch(f"{API}/restaurant/me", json=payload)
+        assert r.status_code == 200, r.text
+        j = r.json()
+        for k, v in payload.items():
+            assert j.get(k) == v, f"{k} did not persist: got {j.get(k)}"
+
+
+# ---------- NEW: Orders with tax / coupon / delivery ----------
+class TestOrdersEnhanced:
+    @pytest.fixture(autouse=True)
+    def _ensure_profile(self, owner_ctx):
+        # Ensure tax/delivery/min_order fields are set on this worker's restaurant
+        owner_ctx["session"].patch(f"{API}/restaurant/me", json={
+            "gst_percent": 5, "service_charge_percent": 10,
+            "delivery_charge": 4, "min_order": 15, "is_open": True,
+        })
+
+    def test_order_below_min_400(self, owner_ctx):
+        # after profile patch, min_order=15
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/orders", json={
+            "restaurant_slug": slug, "customer_name": "A", "customer_phone": "1",
+            "items": [{"item_id": "x", "name": "Snack", "price": 5, "quantity": 1}],
+            "order_type": "dine_in",
+        })
+        assert r.status_code == 400
+
+    def test_order_with_coupon_gst_service(self, owner_ctx):
+        # subtotal 100, coupon TESTPCT20 -> 20% -> 20 but capped at 5 -> discount=5
+        # taxable=95, gst=5% ->4.75, svc=10% ->9.5, delivery=0 (dine_in)
+        # total = 95 + 4.75 + 9.5 = 109.25
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/orders", json={
+            "restaurant_slug": slug, "customer_name": "A", "customer_phone": "1",
+            "items": [{"item_id": "x", "name": "Meal", "price": 50, "quantity": 2}],
+            "order_type": "dine_in",
+            "coupon_code": "TESTPCT20",
+        })
+        assert r.status_code == 200, r.text
+        o = r.json()["order"]
+        assert o["subtotal"] == 100.0
+        assert o["discount"] == 5.0
+        assert o["gst_amount"] == 4.75
+        assert o["service_charge"] == 9.5
+        assert o["delivery_charge"] == 0
+        assert o["total"] == 109.25
+        assert o["coupon_code"] == "TESTPCT20"
+        assert o["order_type"] == "dine_in"
+        assert o["status"] == "sent"
+        owner_ctx["order_id"] = o["order_id"]
+
+    def test_order_delivery_charge_applied(self, owner_ctx):
+        # order_type=delivery -> delivery_charge=4
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/orders", json={
+            "restaurant_slug": slug, "customer_name": "A", "customer_phone": "1",
+            "address": "123 Main St",
+            "items": [{"item_id": "x", "name": "Meal", "price": 20, "quantity": 1}],
+            "order_type": "delivery",
+        })
+        assert r.status_code == 200, r.text
+        o = r.json()["order"]
+        # subtotal=20, no coupon; gst 5% of 20 = 1.0; svc 10% = 2.0; delivery=4
+        assert o["delivery_charge"] == 4.0
+        assert o["gst_amount"] == 1.0
+        assert o["service_charge"] == 2.0
+        assert o["total"] == 27.0
+        assert o["order_type"] == "delivery"
+        assert o["address"] == "123 Main St"
+
+    def test_order_when_closed_400(self, owner_ctx):
+        s = owner_ctx["session"]
+        # close restaurant
+        s.patch(f"{API}/restaurant/me", json={"is_open": False})
+        slug = owner_ctx["slug"]
+        r = requests.post(f"{API}/public/orders", json={
+            "restaurant_slug": slug, "customer_name": "A", "customer_phone": "1",
+            "items": [{"item_id": "x", "name": "Meal", "price": 50, "quantity": 1}],
+            "order_type": "dine_in",
+        })
+        assert r.status_code == 400
+        # reopen
+        s.patch(f"{API}/restaurant/me", json={"is_open": True})
+
+
+# ---------- NEW: Order status updates ----------
+class TestOrderStatus:
+    @pytest.fixture(scope="class")
+    def order_id(self, owner_ctx):
+        # ensure open + create a fresh order
+        owner_ctx["session"].patch(f"{API}/restaurant/me", json={"is_open": True, "min_order": 0})
+        r = requests.post(f"{API}/public/orders", json={
+            "restaurant_slug": owner_ctx["slug"],
+            "customer_name": "Status", "customer_phone": "1",
+            "items": [{"item_id": "x", "name": "Meal", "price": 20, "quantity": 1}],
+            "order_type": "dine_in",
+        })
+        assert r.status_code == 200, r.text
+        return r.json()["order"]["order_id"]
+
+    def test_update_status_valid(self, owner_ctx, order_id):
+        s = owner_ctx["session"]
+        r = s.patch(f"{API}/orders/{order_id}", json={"status": "preparing"})
+        assert r.status_code == 200
+        r2 = s.get(f"{API}/orders")
+        assert r2.status_code == 200
+        o = next((x for x in r2.json() if x["order_id"] == order_id), None)
+        assert o and o["status"] == "preparing"
+
+    def test_update_status_invalid_400(self, owner_ctx, order_id):
+        r = owner_ctx["session"].patch(f"{API}/orders/{order_id}", json={"status": "bogus"})
+        assert r.status_code == 400
+
+    def test_update_status_not_found(self, owner_ctx):
+        r = owner_ctx["session"].patch(f"{API}/orders/ord_nonexistent", json={"status": "ready"})
+        assert r.status_code == 404
 
 
 # ---------- Cleanup: cascade delete ----------

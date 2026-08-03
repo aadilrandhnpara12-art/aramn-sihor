@@ -198,6 +198,18 @@ class RestaurantProfile(BaseModel):
     accent_color: Optional[str] = None
     social: Optional[dict] = None
     currency: Optional[str] = "$"
+    # New fields
+    about_us: Optional[str] = None
+    gst_percent: Optional[float] = None
+    service_charge_percent: Optional[float] = None
+    delivery_charge: Optional[float] = None
+    min_order: Optional[float] = None
+    offer_banner: Optional[str] = None
+    offer_banner_active: Optional[bool] = None
+    gallery: Optional[List[str]] = None
+    accept_dine_in: Optional[bool] = None
+    accept_takeaway: Optional[bool] = None
+    accept_delivery: Optional[bool] = None
 
 
 class TableCreate(BaseModel):
@@ -211,6 +223,29 @@ class OrderCreate(BaseModel):
     table_number: Optional[str] = None
     notes: Optional[str] = None
     items: List[dict]  # [{item_id, name, price, quantity}]
+    order_type: Optional[str] = "dine_in"  # dine_in | takeaway | delivery
+    coupon_code: Optional[str] = None
+    address: Optional[str] = None
+
+
+class OrderStatusUpdate(BaseModel):
+    status: str  # sent | preparing | ready | delivered | cancelled
+
+
+class CouponCreate(BaseModel):
+    code: str
+    kind: str  # percent | flat
+    value: float
+    min_order: float = 0
+    max_discount: Optional[float] = None
+    active: bool = True
+
+
+class ReviewCreate(BaseModel):
+    restaurant_slug: str
+    customer_name: str
+    rating: int  # 1..5
+    comment: Optional[str] = ""
 
 
 class AIDescribeRequest(BaseModel):
@@ -256,6 +291,8 @@ async def startup():
     await db.orders.create_index("restaurant_id")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.qr_scans.create_index("restaurant_id")
+    await db.coupons.create_index([("restaurant_id", 1), ("code", 1)], unique=True)
+    await db.reviews.create_index("restaurant_id")
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
@@ -319,9 +356,20 @@ async def register(body: RegisterRequest, response: Response):
         "banner_url": None,
         "google_map": "",
         "theme": "warm",
-        "accent_color": "#EA580C",
+        "accent_color": "#C2410C",
         "social": {},
         "currency": "$",
+        "gst_percent": 0,
+        "service_charge_percent": 0,
+        "delivery_charge": 0,
+        "min_order": 0,
+        "offer_banner": "",
+        "offer_banner_active": False,
+        "gallery": [],
+        "about_us": "",
+        "accept_dine_in": True,
+        "accept_takeaway": True,
+        "accept_delivery": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
@@ -440,7 +488,10 @@ async def google_session(request: Request, response: Response):
             "tagline": "", "address": "", "phone": "", "whatsapp": "",
             "business_hours": "Mon-Sun 9:00 - 22:00", "is_open": True,
             "logo_url": None, "banner_url": None, "google_map": "",
-            "theme": "warm", "accent_color": "#EA580C", "social": {}, "currency": "$",
+            "theme": "warm", "accent_color": "#C2410C", "social": {}, "currency": "$",
+            "gst_percent": 0, "service_charge_percent": 0, "delivery_charge": 0, "min_order": 0,
+            "offer_banner": "", "offer_banner_active": False, "gallery": [], "about_us": "",
+            "accept_dine_in": True, "accept_takeaway": True, "accept_delivery": False,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         user = await db.users.find_one({"email": email})
@@ -623,13 +674,18 @@ async def public_restaurant(slug: str, table: Optional[str] = None):
         raise HTTPException(404, "Restaurant not found")
     cats = await db.categories.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).sort("order", 1).to_list(500)
     items = await db.menu_items.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).to_list(2000)
+    revs_agg = await db.reviews.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0, "rating": 1}).to_list(2000)
+    avg = round(sum(x["rating"] for x in revs_agg) / len(revs_agg), 1) if revs_agg else 0
     # Log scan
     await db.qr_scans.insert_one({
         "restaurant_id": r["restaurant_id"],
         "table": table,
         "at": datetime.now(timezone.utc).isoformat(),
     })
-    return {"restaurant": r, "categories": cats, "items": items}
+    return {
+        "restaurant": r, "categories": cats, "items": items,
+        "reviews_summary": {"average": avg, "count": len(revs_agg)},
+    }
 
 
 @api.post("/public/orders")
@@ -637,33 +693,88 @@ async def public_create_order(body: OrderCreate):
     r = await db.restaurants.find_one({"slug": body.restaurant_slug}, {"_id": 0})
     if not r:
         raise HTTPException(404, "Restaurant not found")
-    total = sum(float(i.get("price", 0)) * int(i.get("quantity", 1)) for i in body.items)
+    if not r.get("is_open", True):
+        raise HTTPException(400, "Restaurant is currently closed")
+
+    subtotal = sum(float(i.get("price", 0)) * int(i.get("quantity", 1)) for i in body.items)
+    min_order = float(r.get("min_order") or 0)
+    if min_order and subtotal < min_order:
+        raise HTTPException(400, f"Minimum order is {r.get('currency','$')}{min_order}")
+
+    # Coupon
+    discount = 0.0
+    coupon_used = None
+    if body.coupon_code:
+        c = await db.coupons.find_one({"restaurant_id": r["restaurant_id"], "code": body.coupon_code.upper(), "active": True})
+        if not c:
+            raise HTTPException(400, "Invalid or inactive coupon")
+        if subtotal < float(c.get("min_order", 0)):
+            raise HTTPException(400, f"Coupon requires minimum order of {r.get('currency','$')}{c['min_order']}")
+        if c["kind"] == "percent":
+            discount = subtotal * (float(c["value"]) / 100)
+            if c.get("max_discount"):
+                discount = min(discount, float(c["max_discount"]))
+        else:
+            discount = float(c["value"])
+        coupon_used = c["code"]
+
+    gst_pct = float(r.get("gst_percent") or 0)
+    svc_pct = float(r.get("service_charge_percent") or 0)
+    delivery = float(r.get("delivery_charge") or 0) if body.order_type == "delivery" else 0
+
+    taxable = max(0, subtotal - discount)
+    gst_amount = taxable * (gst_pct / 100)
+    svc_amount = taxable * (svc_pct / 100)
+    total = taxable + gst_amount + svc_amount + delivery
+
     order = {
         "order_id": f"ord_{uuid.uuid4().hex[:10]}",
         "restaurant_id": r["restaurant_id"],
         "customer_name": body.customer_name,
         "customer_phone": body.customer_phone,
         "table_number": body.table_number,
+        "order_type": body.order_type or "dine_in",
         "notes": body.notes,
+        "address": body.address,
         "items": body.items,
+        "subtotal": round(subtotal, 2),
+        "discount": round(discount, 2),
+        "coupon_code": coupon_used,
+        "gst_amount": round(gst_amount, 2),
+        "service_charge": round(svc_amount, 2),
+        "delivery_charge": round(delivery, 2),
         "total": round(total, 2),
         "currency": r.get("currency", "$"),
         "status": "sent",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.insert_one(order)
+
     # Build WhatsApp URL
+    cur = r.get("currency", "$")
     lines = [f"*New Order — {r['name']}*", ""]
     if body.table_number:
         lines.append(f"Table: {body.table_number}")
+    lines.append(f"Type: {body.order_type or 'dine_in'}")
     lines.append(f"Customer: {body.customer_name}")
     lines.append(f"Phone: {body.customer_phone}")
+    if body.order_type == "delivery" and body.address:
+        lines.append(f"Address: {body.address}")
     lines.append("")
     lines.append("Items:")
     for it in body.items:
-        lines.append(f"• {it['quantity']}× {it['name']} — {r.get('currency','$')}{it['price']}")
+        lines.append(f"• {it['quantity']}× {it['name']} — {cur}{it['price']}")
     lines.append("")
-    lines.append(f"Total: {r.get('currency','$')}{round(total,2)}")
+    lines.append(f"Subtotal: {cur}{round(subtotal,2)}")
+    if discount:
+        lines.append(f"Discount ({coupon_used}): -{cur}{round(discount,2)}")
+    if gst_amount:
+        lines.append(f"GST ({gst_pct}%): {cur}{round(gst_amount,2)}")
+    if svc_amount:
+        lines.append(f"Service ({svc_pct}%): {cur}{round(svc_amount,2)}")
+    if delivery:
+        lines.append(f"Delivery: {cur}{round(delivery,2)}")
+    lines.append(f"*Total: {cur}{round(total,2)}*")
     if body.notes:
         lines.append("")
         lines.append(f"Notes: {body.notes}")
@@ -672,6 +783,128 @@ async def public_create_order(body: OrderCreate):
     wa_url = f"https://wa.me/{wa_number}?text={quote_plus(msg)}" if wa_number else None
     order.pop("_id", None)
     return {"order": order, "whatsapp_url": wa_url}
+
+
+# ---------- Coupons ----------
+@api.get("/coupons")
+async def list_coupons(user: dict = Depends(require_owner)):
+    r = await get_owner_restaurant(user)
+    cs = await db.coupons.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).to_list(200)
+    return cs
+
+
+@api.post("/coupons")
+async def create_coupon(body: CouponCreate, user: dict = Depends(require_owner)):
+    r = await get_owner_restaurant(user)
+    doc = {
+        "coupon_id": f"cpn_{uuid.uuid4().hex[:10]}",
+        "restaurant_id": r["restaurant_id"],
+        "code": body.code.upper(),
+        "kind": body.kind,
+        "value": body.value,
+        "min_order": body.min_order,
+        "max_discount": body.max_discount,
+        "active": body.active,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.coupons.insert_one(doc)
+    except Exception:
+        raise HTTPException(400, "Coupon code already exists")
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/coupons/{coupon_id}")
+async def toggle_coupon(coupon_id: str, request: Request, user: dict = Depends(require_owner)):
+    r = await get_owner_restaurant(user)
+    body = await request.json()
+    active = bool(body.get("active", True))
+    res = await db.coupons.update_one({"coupon_id": coupon_id, "restaurant_id": r["restaurant_id"]}, {"$set": {"active": active}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
+
+
+@api.delete("/coupons/{coupon_id}")
+async def delete_coupon(coupon_id: str, user: dict = Depends(require_owner)):
+    r = await get_owner_restaurant(user)
+    await db.coupons.delete_one({"coupon_id": coupon_id, "restaurant_id": r["restaurant_id"]})
+    return {"ok": True}
+
+
+@api.get("/public/coupons/{slug}/{code}")
+async def public_validate_coupon(slug: str, code: str, subtotal: float = 0):
+    r = await db.restaurants.find_one({"slug": slug}, {"_id": 0, "restaurant_id": 1, "currency": 1})
+    if not r:
+        raise HTTPException(404, "Restaurant not found")
+    c = await db.coupons.find_one({"restaurant_id": r["restaurant_id"], "code": code.upper(), "active": True})
+    if not c:
+        raise HTTPException(404, "Invalid coupon")
+    if subtotal < float(c.get("min_order", 0)):
+        raise HTTPException(400, f"Requires minimum order of {r.get('currency','$')}{c['min_order']}")
+    if c["kind"] == "percent":
+        disc = subtotal * (float(c["value"]) / 100)
+        if c.get("max_discount"):
+            disc = min(disc, float(c["max_discount"]))
+    else:
+        disc = float(c["value"])
+    return {"code": c["code"], "kind": c["kind"], "value": c["value"], "discount": round(disc, 2)}
+
+
+# ---------- Reviews ----------
+@api.post("/public/reviews")
+async def create_review(body: ReviewCreate):
+    r = await db.restaurants.find_one({"slug": body.restaurant_slug}, {"_id": 0, "restaurant_id": 1})
+    if not r:
+        raise HTTPException(404, "Restaurant not found")
+    if body.rating < 1 or body.rating > 5:
+        raise HTTPException(400, "Rating must be 1-5")
+    doc = {
+        "review_id": f"rev_{uuid.uuid4().hex[:10]}",
+        "restaurant_id": r["restaurant_id"],
+        "customer_name": body.customer_name,
+        "rating": body.rating,
+        "comment": body.comment or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.reviews.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/public/reviews/{slug}")
+async def list_public_reviews(slug: str):
+    r = await db.restaurants.find_one({"slug": slug}, {"_id": 0, "restaurant_id": 1})
+    if not r:
+        raise HTTPException(404, "Not found")
+    revs = await db.reviews.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
+    avg = 0
+    if revs:
+        avg = round(sum(x["rating"] for x in revs) / len(revs), 1)
+    return {"reviews": revs, "average": avg, "count": len(revs)}
+
+
+@api.get("/reviews")
+async def owner_reviews(user: dict = Depends(require_owner)):
+    r = await get_owner_restaurant(user)
+    revs = await db.reviews.find({"restaurant_id": r["restaurant_id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return revs
+
+
+# ---------- Order status ----------
+@api.patch("/orders/{order_id}")
+async def update_order_status(order_id: str, body: OrderStatusUpdate, user: dict = Depends(require_owner)):
+    if body.status not in ("sent", "preparing", "ready", "delivered", "cancelled"):
+        raise HTTPException(400, "Invalid status")
+    r = await get_owner_restaurant(user)
+    res = await db.orders.update_one(
+        {"order_id": order_id, "restaurant_id": r["restaurant_id"]},
+        {"$set": {"status": body.status}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"ok": True}
 
 
 # ---------- AI Description ----------

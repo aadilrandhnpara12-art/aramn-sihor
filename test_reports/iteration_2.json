@@ -1,0 +1,58 @@
+{
+  "summary": "Iteration 2 backend testing for Restaurant Digital QR Menu Maker SaaS — new features (coupons, reviews, order status, tax/service/delivery, offer banner/gallery/about_us, order types with address/coupon_code) plus regression of all iteration-1 endpoints. Extended /app/backend/tests/backend_test.py with 26 new pytest cases (52 total). All 52 tests PASS on pytest-xdist with LoadScopeScheduling. Coverage: coupon CRUD + duplicate 400 + public validation (percent-with-cap, flat, below-min, invalid, inactive), review create (valid 1-5, invalid 0/6 -> 400), public reviews list+avg+count, owner /api/reviews (auth-gated), /api/public/restaurant now returns reviews_summary, restaurant PATCH persists all new fields, orders compute subtotal+discount+GST+service+delivery correctly, coupon max_discount cap enforced, order_type='delivery' applies delivery_charge, is_open=false returns 400, subtotal<min_order returns 400, PATCH /api/orders/{id} status transitions with 400 on invalid and 404 on unknown id.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/public/orders", "issue": "No validation that order_type is in {dine_in, takeaway, delivery}. Free-text values are stored. Should validate with an Enum."},
+      {"endpoint": "/api/public/orders", "issue": "When order_type='delivery', address is optional/not validated — deliveries may be accepted without an address."},
+      {"endpoint": "/api/public/orders", "issue": "Does not check accept_dine_in/accept_takeaway/accept_delivery flags — a delivery order still succeeds when accept_delivery=false. Feature exposed on profile but not enforced server-side."},
+      {"endpoint": "/api/coupons POST", "issue": "kind is a free-text string; should be validated to {percent, flat}. Passing kind='xyz' would insert an invalid coupon (checkout logic falls to else -> flat)."},
+      {"endpoint": "/api/coupons POST", "issue": "value has no range validation. Percent > 100 accepted; negative flat accepted."},
+      {"endpoint": "/api/public/coupons/{slug}/{code}", "issue": "Does not enforce coupon max_discount cap consistency vs /public/orders — both use same formula, but there is no coupon expiry field."},
+      {"endpoint": "/api/orders/{id} PATCH", "issue": "Only updates status; does not append a status history/timeline. If UI wants an audit trail it would need one."},
+      {"endpoint": "/api/public/restaurant", "issue": "Injects a qr_scans document on EVERY public GET including bot/crawler hits and repeated polling — inflates analytics.scans. Should throttle per IP or require an explicit scan endpoint."},
+      {"endpoint": "/api/public/reviews", "issue": "No rate limit / spam protection; anyone can post unlimited reviews for any slug. Rating validation is post-model (should be Pydantic ge/le)."},
+      {"endpoint": "/api/restaurant/me PATCH", "issue": "Cannot clear list fields via null (e.g., empty gallery). Passing gallery=[] works, but passing null is filtered out by 'v is not None' guard — minor UX."},
+      {"endpoint": "/api/coupons PATCH", "issue": "Endpoint only supports toggling `active`; cannot edit code/value/min_order/max_discount. Owners have to delete + recreate."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: validate order_type via Literal/Enum and require address when order_type=='delivery'.",
+    "Optional: enforce accept_dine_in/accept_takeaway/accept_delivery in POST /api/public/orders (currently only stored, not enforced).",
+    "Optional: validate CouponCreate.kind in {percent, flat} and value/min_order/max_discount ranges via Pydantic validators.",
+    "Optional: rate-limit /api/public/reviews and /api/public/restaurant scans to avoid inflated analytics.",
+    "Optional: allow editing coupons (not just toggling active).",
+    "Optional: split server.py (1082 lines) into routers per module for maintainability."
+  ],
+  "critical_code_review_comments": [
+    "server.py grew to 1082 lines — past the 700-line threshold; split into routers/coupons.py, routers/reviews.py, routers/orders.py, routers/owner.py, routers/admin.py.",
+    "OrderCreate.order_type is Optional[str] with no whitelist — a client could send arbitrary values (breaks analytics grouping).",
+    "public_create_order does NOT enforce restaurant.accept_delivery / accept_takeaway / accept_dine_in flags — the feature exists on the profile but has no gate.",
+    "public_create_order stores coupon.code (uppercased) but doesn't decrement any usage count / cap redemptions per customer.",
+    "CouponCreate.kind lacks Literal['percent','flat'] typing; invalid kind values silently behave as 'flat' in checkout logic.",
+    "public_validate_coupon returns 404 for both 'code not found' and 'inactive'; the two should be distinguishable (401/410 for inactive vs 404 for missing).",
+    "public_restaurant logs a scan on every request — no throttling; owner analytics.scans is easily inflated. Consider IP/session dedupe or a dedicated /api/public/scan endpoint.",
+    "reviews rating validation happens after HTTP layer (raise HTTPException 400 inside handler) rather than via Pydantic Field(ge=1, le=5) — model-level validation would return 422 with a clearer schema.",
+    "PATCH /api/coupons/{id} reads request.json() manually instead of using a Pydantic body — inconsistent style and no validation.",
+    "No pagination on /api/orders, /api/reviews (capped .to_list(500)) — will silently truncate on busy restaurants.",
+    "gst_amount/service_charge computed on TAXABLE base (subtotal-discount). This is a business decision — some jurisdictions tax the pre-discount subtotal. Document assumption.",
+    "business_hours is a free-form string and 'is_open' is a manual toggle — the review-request mentions 'Business hours enforcement' but there is no automatic open/close based on business_hours."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (added TestCoupons, TestReviews, TestRestaurantProfileNewFields, TestOrdersEnhanced, TestOrderStatus + patched owner_ctx to pre-set whatsapp)",
+    "/app/test_reports/pytest/pytest_results.xml (regenerated, 52 passed)"
+  ],
+  "success_rate": {"backend": "100% (52/52)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Admin: aadilrandhnpara12@gmail.com / Admin@12345 — working. Owner accounts created per-worker via TEST_owner_<hex>@example.com and cascade-deleted at end of run.",
+  "seed_data_creation": "Each xdist worker creates its own owner + restaurant + category + item + table + coupons (TESTPCT20, TESTFLAT3) + reviews + orders and deletes them via admin cascade in TestCleanupCascade. No leftover data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Tests run with pytest-xdist LoadScopeScheduling — session fixtures execute PER WORKER, so each worker registers its own owner. If adding new classes that mutate restaurant profile, keep the class self-contained (patch the profile inside a class-level autouse fixture) or state may leak/race across workers. owner_ctx fixture now pre-patches whatsapp so public order tests reliably generate wa.me URLs. TestOrdersEnhanced patches gst=5, service=10, delivery=4, min_order=15 in its autouse fixture. TestOrderStatus creates its own order via a class-scoped fixture (does not rely on owner_ctx['order_id']). New feature 'business hours enforcement' is NOT actually implemented server-side — only is_open toggle. accept_dine_in/takeaway/delivery flags are stored but not enforced by /api/public/orders.",
+  "rca of the issue": "N/A — all 52 tests pass. Initial 6 failures during development were due to pytest-xdist per-worker session fixtures + class ordering (TestOrdersEnhanced ran before TestRestaurantProfileNewFields on gw0). Fixed by adding class-scoped autouse fixtures in TestOrdersEnhanced/TestOrderStatus to patch the restaurant profile inline instead of relying on cross-class ordering."
+}

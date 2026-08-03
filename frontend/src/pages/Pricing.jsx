@@ -2,63 +2,64 @@ import React, { useEffect, useState } from "react";
 import PublicNav from "../components/layout/PublicNav";
 import { api } from "../lib/api";
 import { Link } from "react-router-dom";
-import { Check, Sparkle } from "@phosphor-icons/react";
+import { Check, Sparkle, ArrowRight } from "@phosphor-icons/react";
 
 export default function Pricing() {
   const [plans, setPlans] = useState([]);
   useEffect(() => { api.get("/plans").then(r => setPlans(r.data)).catch(() => {}); }, []);
 
   return (
-    <div className="cyber-bg cyber-noise min-h-screen">
-      <div className="absolute inset-0 cyber-grid opacity-40 pointer-events-none" />
+    <div className="min-h-screen bg-ink-50 text-ink-900">
       <PublicNav />
-      <section className="relative max-w-7xl mx-auto px-6 lg:px-10 pt-20 pb-32">
-        <div className="text-center max-w-2xl mx-auto mb-20">
-          <div className="overline mb-4 text-cyan-300">Pricing</div>
-          <h1 className="font-display font-bold text-5xl lg:text-6xl text-white tracking-tight leading-tight">
-            Pay for the <span className="text-cyan-400">growth</span>.<br /> Not the software.
+      <section className="container-editorial pt-16 pb-24 lg:pt-24 lg:pb-32">
+        <div className="max-w-3xl mx-auto text-center mb-20">
+          <div className="overline mb-4">Pricing</div>
+          <h1 className="display font-semibold text-5xl lg:text-7xl leading-[0.98] text-ink-900">
+            Simple pricing, <span className="serif-italic text-clay-600">honest math.</span>
           </h1>
-          <p className="mt-6 text-white/60">Cancel anytime. Free trial on every paid plan.</p>
+          <p className="mt-6 text-lg text-ink-600 leading-relaxed">
+            Start free. Grow into a plan when you're ready. Cancel with a single click.
+          </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
           {plans.map((p) => (
             <div
               key={p.id}
               data-testid={`plan-${p.id}`}
-              className={`cyber-card p-8 relative ${p.popular ? "cyber-glow-fuchsia border-fuchsia-500/40" : ""}`}
+              className={`relative rounded-2xl p-8 flex flex-col ${p.popular ? "bg-ink-900 text-ink-50 border border-ink-900 shadow-xl" : "card-editorial"}`}
             >
               {p.popular && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 warm-pill bg-gradient-to-r from-cyan-400 to-fuchsia-400 text-black mono uppercase tracking-wider">
-                  Popular
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 pill bg-clay-600 text-white text-xs">
+                  <Sparkle size={12} weight="fill" /> Most popular
                 </div>
               )}
-              <div className="font-display font-semibold text-lg text-white">{p.name}</div>
-              <div className="mt-4 flex items-baseline gap-1">
-                <span className="mono text-4xl font-bold text-white">${p.price}</span>
-                <span className="text-white/50 text-sm">/{p.period}</span>
+              <div className="display text-xl font-semibold">{p.name}</div>
+              <div className="mt-6 flex items-baseline gap-1">
+                <span className="display mono text-5xl font-bold">${p.price}</span>
+                <span className={p.popular ? "text-ink-400" : "text-ink-500"}>/{p.period}</span>
               </div>
-              <ul className="mt-8 space-y-3">
+              <ul className="mt-8 space-y-3 flex-1">
                 {p.features.map((f) => (
-                  <li key={f} className="text-sm text-white/70 flex gap-2">
-                    <Check size={16} weight="bold" className="text-cyan-400 mt-0.5 shrink-0" />
-                    <span>{f}</span>
+                  <li key={f} className="text-sm flex gap-2">
+                    <Check size={16} weight="bold" className={p.popular ? "text-clay-400 mt-0.5 shrink-0" : "text-clay-600 mt-0.5 shrink-0"} />
+                    <span className={p.popular ? "text-ink-100" : "text-ink-700"}>{f}</span>
                   </li>
                 ))}
               </ul>
               <Link
                 to={p.id === "free" ? "/register" : "/contact"}
                 data-testid={`plan-cta-${p.id}`}
-                className={`mt-8 w-full text-center block ${p.popular ? "cyber-btn" : "cyber-btn-ghost"}`}
+                className={`mt-8 w-full ${p.popular ? "btn-accent" : "btn-ghost"}`}
               >
-                {p.id === "free" ? <><Sparkle size={16} weight="fill" /> Start free</> : p.cta}
+                {p.id === "free" ? "Start free" : p.cta} <ArrowRight size={14} weight="bold" />
               </Link>
             </div>
           ))}
         </div>
 
-        <div className="mt-16 text-center text-white/40 text-xs mono uppercase tracking-widest">
-          Paid plans coming soon · Contact us to activate manually
+        <div className="mt-14 text-center text-sm text-ink-500">
+          Paid plans currently activated manually by our team — <Link className="btn-link" to="/contact">contact us</Link> to upgrade.
         </div>
       </section>
     </div>

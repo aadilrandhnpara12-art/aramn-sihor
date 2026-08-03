@@ -20,7 +20,6 @@ export default function AuthCallback() {
     (async () => {
       try {
         const { data } = await api.post("/auth/google/session", { session_id: sessionId });
-        // Clear hash
         window.history.replaceState({}, "", window.location.pathname);
         setUser(data);
         const me = await api.get("/auth/me");
@@ -35,10 +34,10 @@ export default function AuthCallback() {
   }, [location.hash, nav, setUser]);
 
   return (
-    <div className="cyber-bg min-h-screen grid place-items-center text-white">
+    <div className="min-h-screen bg-ink-50 grid place-items-center">
       <div className="text-center">
-        <div className="w-14 h-14 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin mx-auto mb-6" />
-        <div className="mono text-white/60 text-sm uppercase tracking-widest">Signing you in…</div>
+        <div className="w-14 h-14 border-2 border-clay-200 border-t-clay-600 rounded-full animate-spin mx-auto mb-6" />
+        <div className="mono text-ink-500 text-sm uppercase tracking-widest">Signing you in…</div>
       </div>
     </div>
   );
