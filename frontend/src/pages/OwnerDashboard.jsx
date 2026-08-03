@@ -52,6 +52,7 @@ export default function OwnerDashboard() {
   const [coupons, setCoupons] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [analytics, setAnalytics] = useState(null);
+  const [showAiImport, setShowAiImport] = useState(false);
 
   useEffect(() => {
     if (user === false) nav("/login");
@@ -117,7 +118,7 @@ export default function OwnerDashboard() {
           </div>
         </div>
 
-        {tab === "menu" && <MenuTab cats={cats} items={items} restaurant={restaurant} reload={load} />}
+        {tab === "menu" && <MenuTab cats={cats} items={items} restaurant={restaurant} reload={load} showAiImport={showAiImport} setShowAiImport={setShowAiImport} />}
         {tab === "qr" && <QRTab restaurant={restaurant} tables={tables} reload={load} />}
         {tab === "orders" && <OrdersTab orders={orders} restaurant={restaurant} reload={() => api.get("/orders").then((r) => setOrders(r.data))} />}
         {tab === "coupons" && <CouponsTab coupons={coupons} restaurant={restaurant} reload={() => api.get("/coupons").then((r) => setCoupons(r.data))} />}
@@ -130,7 +131,7 @@ export default function OwnerDashboard() {
 }
 
 /* ================== MENU TAB ================== */
-function MenuTab({ cats, items, restaurant, reload }) {
+function MenuTab({ cats, items, restaurant, reload, showAiImport, setShowAiImport }) {
   const [showCat, setShowCat] = useState(false);
   const [showItem, setShowItem] = useState(false);
   const [editItem, setEditItem] = useState(null);
@@ -171,9 +172,14 @@ function MenuTab({ cats, items, restaurant, reload }) {
             <div className="overline">Menu items</div>
             <div className="text-ink-500 text-sm">{filtered.length} item{filtered.length !== 1 ? "s" : ""}</div>
           </div>
-          <button onClick={() => { if (cats.length === 0) return toast.error("Create a category first"); setEditItem(null); setShowItem(true); }} data-testid="add-item-btn" className="btn-accent text-sm">
-            <Plus size={14} weight="bold" /> Add item
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowAiImport(true)} data-testid="ai-import-btn" className="btn-ghost text-sm">
+              <Sparkle size={14} weight="fill" className="text-clay-600" /> Import from photo
+            </button>
+            <button onClick={() => { if (cats.length === 0) return toast.error("Create a category first"); setEditItem(null); setShowItem(true); }} data-testid="add-item-btn" className="btn-accent text-sm">
+              <Plus size={14} weight="bold" /> Add item
+            </button>
+          </div>
         </div>
         {filtered.length === 0 ? (
           <div className="card-editorial p-16 text-center">
@@ -219,7 +225,144 @@ function MenuTab({ cats, items, restaurant, reload }) {
 
       {showCat && <CategoryModal onClose={() => setShowCat(false)} onSaved={() => { setShowCat(false); reload(); }} />}
       {showItem && <ItemModal cats={cats} existing={editItem} onClose={() => setShowItem(false)} onSaved={() => { setShowItem(false); reload(); }} />}
+      {showAiImport && <AIImportModal onClose={() => setShowAiImport(false)} onSaved={() => { setShowAiImport(false); reload(); }} />}
     </div>
+  );
+}
+
+/* ================== AI IMPORT MODAL ================== */
+function AIImportModal({ onClose, onSaved }) {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [extracting, setExtracting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [items, setItems] = useState([]);
+  const fileRef = useRef(null);
+
+  const onFile = (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    setFile(f);
+    const reader = new FileReader();
+    reader.onload = (ev) => setPreview(ev.target.result);
+    reader.readAsDataURL(f);
+  };
+
+  const extract = async () => {
+    if (!file) return toast.error("Select a photo first");
+    setExtracting(true);
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const { data } = await api.post("/ai/menu-from-photo", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      if (!data.items || data.items.length === 0) {
+        toast.error("No items detected. Try a clearer photo.");
+      } else {
+        setItems(data.items.map((it, i) => ({ ...it, _id: i, _selected: true })));
+        toast.success(`Detected ${data.items.length} items`);
+      }
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail, "AI extraction failed")); }
+    finally { setExtracting(false); }
+  };
+
+  const updateItem = (id, field, val) => setItems((arr) => arr.map((it) => it._id === id ? { ...it, [field]: val } : it));
+  const removeItem = (id) => setItems((arr) => arr.filter((it) => it._id !== id));
+
+  const saveAll = async () => {
+    const selected = items.filter((it) => it._selected && it.name);
+    if (selected.length === 0) return toast.error("Nothing to save");
+    setSaving(true);
+    try {
+      // Group by category, find-or-create each, then bulk create items per category
+      const byCat = {};
+      for (const it of selected) {
+        const cname = it.category || "General";
+        (byCat[cname] = byCat[cname] || []).push(it);
+      }
+      let totalCreated = 0;
+      for (const [cname, arr] of Object.entries(byCat)) {
+        const catRes = await api.post("/categories/find-or-create", { name: cname });
+        const catId = catRes.data.category_id;
+        const payload = arr.map((it) => ({
+          name: it.name, description: it.description || "", price: parseFloat(it.price) || 0,
+          veg: !!it.veg, bestseller: !!it.bestseller, spicy_level: parseInt(it.spicy_level) || 0,
+        }));
+        const bulk = await api.post("/items/bulk", { category_id: catId, items: payload });
+        totalCreated += bulk.data.created;
+      }
+      toast.success(`Saved ${totalCreated} items to your menu`);
+      onSaved();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail, "Save failed")); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} size="lg">
+      <div className="p-8" data-testid="ai-import-modal">
+        <div className="overline mb-2 text-clay-600">AI import</div>
+        <h3 className="display text-2xl font-semibold text-ink-900 mb-2">Build a menu from a photo</h3>
+        <p className="text-ink-600 text-sm mb-6">Snap a picture of your paper menu or handwritten list. AI will extract items, prices and categories. Review, tweak, and save.</p>
+
+        {items.length === 0 ? (
+          <div className="space-y-4">
+            <div className="border-2 border-dashed border-ink-200 rounded-2xl p-8 text-center hover:border-clay-400 transition-colors">
+              {preview ? (
+                <div>
+                  <img src={preview} alt="preview" className="max-h-64 mx-auto rounded-lg" />
+                  <div className="text-xs text-ink-500 mono mt-3">{file?.name}</div>
+                  <button onClick={()=>fileRef.current?.click()} className="btn-ghost text-xs mt-3">Change photo</button>
+                </div>
+              ) : (
+                <>
+                  <div className="w-14 h-14 rounded-full bg-clay-50 grid place-items-center mx-auto mb-4 text-clay-600"><Camera size={22} weight="regular" /></div>
+                  <div className="display font-semibold text-ink-900 text-lg mb-1">Upload a menu photo</div>
+                  <div className="text-ink-500 text-sm mb-4">PNG, JPG, HEIC · up to 10MB</div>
+                  <button onClick={()=>fileRef.current?.click()} data-testid="ai-select-photo" className="btn-accent text-sm">Choose photo</button>
+                </>
+              )}
+              <input ref={fileRef} type="file" accept="image/*" onChange={onFile} className="hidden" data-testid="ai-file-input" />
+            </div>
+            {preview && (
+              <button onClick={extract} disabled={extracting} data-testid="ai-extract-btn" className="btn-primary w-full">
+                <Sparkle size={16} weight="fill" /> {extracting ? "Reading your menu…" : "Extract items with AI"}
+              </button>
+            )}
+            <div className="flex justify-end pt-2">
+              <button type="button" onClick={onClose} className="btn-ghost text-sm">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="overline">{items.length} items detected</div>
+              <button onClick={()=>{ setItems([]); setPreview(null); setFile(null); }} className="text-xs text-ink-600 hover:text-ink-900">← Upload another photo</button>
+            </div>
+            <div className="max-h-[420px] overflow-y-auto pr-2 space-y-2">
+              {items.map((it) => (
+                <div key={it._id} className={`border rounded-lg p-3 grid grid-cols-12 gap-2 items-start ${it._selected ? "border-clay-300 bg-clay-50/40" : "border-ink-200 bg-ink-100/40 opacity-60"}`} data-testid={`ai-item-${it._id}`}>
+                  <input type="checkbox" checked={it._selected} onChange={(e)=>updateItem(it._id, "_selected", e.target.checked)} className="col-span-1 mt-2 accent-clay-600" />
+                  <input value={it.name} onChange={(e)=>updateItem(it._id, "name", e.target.value)} placeholder="Name" className="col-span-4 input-field !py-2 text-sm" />
+                  <input value={it.category} onChange={(e)=>updateItem(it._id, "category", e.target.value)} placeholder="Category" className="col-span-3 input-field !py-2 text-sm" />
+                  <input type="number" step="0.01" value={it.price} onChange={(e)=>updateItem(it._id, "price", e.target.value)} placeholder="Price" className="col-span-2 input-field !py-2 text-sm mono" />
+                  <div className="col-span-2 flex items-center gap-1">
+                    <button type="button" onClick={()=>updateItem(it._id, "veg", !it.veg)} className={`text-xs px-2 py-1 rounded border ${it.veg ? "border-moss-500 bg-moss-50 text-moss-700" : "border-clay-500 bg-clay-50 text-clay-700"}`}>{it.veg ? "Veg" : "Non"}</button>
+                    <button type="button" onClick={()=>removeItem(it._id)} className="text-ink-400 hover:text-red-500 w-6 h-6 grid place-items-center"><Trash size={12} /></button>
+                  </div>
+                  <input value={it.description||""} onChange={(e)=>updateItem(it._id, "description", e.target.value)} placeholder="Description (optional)" className="col-span-12 input-field !py-1.5 text-xs" />
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between items-center pt-6 border-t border-ink-200 mt-6">
+              <div className="text-sm text-ink-600">{items.filter(i => i._selected).length} selected · will create categories automatically</div>
+              <div className="flex gap-2">
+                <button type="button" onClick={onClose} className="btn-ghost text-sm">Cancel</button>
+                <button onClick={saveAll} disabled={saving} data-testid="ai-save-all-btn" className="btn-accent text-sm">
+                  <Check size={14} weight="bold" /> {saving ? "Saving..." : `Save ${items.filter(i => i._selected).length} items`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 

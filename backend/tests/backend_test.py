@@ -658,6 +658,184 @@ class TestOrderStatus:
         assert r.status_code == 404
 
 
+# ---------- NEW iter-3: AI translate ----------
+class TestAITranslate:
+    def test_translate_requires_auth(self):
+        r = requests.post(f"{API}/ai/translate", json={"text": "Hello", "target_language": "hi"})
+        assert r.status_code == 401
+
+    def test_translate_hindi(self, owner_ctx):
+        r = owner_ctx["session"].post(f"{API}/ai/translate", json={
+            "text": "Paneer Tikka - grilled cottage cheese", "target_language": "hi",
+        })
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert "translated" in j and isinstance(j["translated"], str) and len(j["translated"]) > 0
+        assert j.get("language") == "Hindi"
+
+    def test_translate_spanish(self, owner_ctx):
+        r = owner_ctx["session"].post(f"{API}/ai/translate", json={
+            "text": "Chicken Curry", "target_language": "es",
+        })
+        assert r.status_code == 200
+        assert r.json().get("language") == "Spanish"
+
+
+# ---------- NEW iter-3: AI menu from photo ----------
+class TestAIMenuFromPhoto:
+    # 1x1 JPEG (minimal valid) - use a small PNG payload; endpoint accepts image/* content type
+    PNG_BYTES = bytes.fromhex(
+        "89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4"
+        "890000000A49444154789C6300010000000500010D0A2DB40000000049454E44AE426082"
+    )
+
+    def _client(self, owner_ctx):
+        s2 = requests.Session()
+        s2.headers.update({"Authorization": owner_ctx["session"].headers["Authorization"]})
+        return s2
+
+    def test_menu_from_photo_requires_auth(self):
+        files = {"file": ("m.png", io.BytesIO(self.PNG_BYTES), "image/png")}
+        r = requests.post(f"{API}/ai/menu-from-photo", files=files)
+        assert r.status_code == 401
+
+    def test_menu_from_photo_rejects_non_image(self, owner_ctx):
+        s = self._client(owner_ctx)
+        files = {"file": ("m.txt", io.BytesIO(b"not an image"), "text/plain")}
+        r = s.post(f"{API}/ai/menu-from-photo", files=files, timeout=60)
+        assert r.status_code == 400, r.text
+
+    def test_menu_from_photo_success_shape(self, owner_ctx):
+        s = self._client(owner_ctx)
+        files = {"file": ("m.png", io.BytesIO(self.PNG_BYTES), "image/png")}
+        r = s.post(f"{API}/ai/menu-from-photo", files=files, timeout=90)
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert "items" in j and isinstance(j["items"], list)
+        assert "count" in j and j["count"] == len(j["items"])
+        # If any items returned, verify schema
+        for it in j["items"]:
+            assert set(["name", "description", "price", "category", "veg", "spicy_level", "bestseller"]).issubset(it.keys())
+            assert isinstance(it["price"], (int, float))
+            assert isinstance(it["veg"], bool)
+            assert 0 <= it["spicy_level"] <= 3
+
+
+# ---------- NEW iter-3: find-or-create category ----------
+class TestFindOrCreateCategory:
+    def test_requires_auth(self):
+        r = requests.post(f"{API}/categories/find-or-create", json={"name": "Drinks"})
+        assert r.status_code == 401
+
+    def test_empty_name_400(self, owner_ctx):
+        r = owner_ctx["session"].post(f"{API}/categories/find-or-create", json={"name": "   "})
+        assert r.status_code == 400
+
+    def test_create_new(self, owner_ctx):
+        unique = f"TESTCAT_{uuid.uuid4().hex[:6]}"
+        r = owner_ctx["session"].post(f"{API}/categories/find-or-create", json={"name": unique})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["name"] == unique
+        assert j["category_id"].startswith("cat_")
+        owner_ctx["foc_cat_id"] = j["category_id"]
+        owner_ctx["foc_cat_name"] = unique
+
+    def test_idempotent_same_name(self, owner_ctx):
+        name = owner_ctx["foc_cat_name"]
+        r = owner_ctx["session"].post(f"{API}/categories/find-or-create", json={"name": name})
+        assert r.status_code == 200
+        assert r.json()["category_id"] == owner_ctx["foc_cat_id"]
+
+    def test_case_insensitive_match(self, owner_ctx):
+        name = owner_ctx["foc_cat_name"].lower()
+        r = owner_ctx["session"].post(f"{API}/categories/find-or-create", json={"name": name})
+        assert r.status_code == 200
+        assert r.json()["category_id"] == owner_ctx["foc_cat_id"]
+
+
+# ---------- NEW iter-3: bulk items ----------
+class TestBulkItems:
+    def test_requires_auth(self, owner_ctx):
+        r = requests.post(f"{API}/items/bulk", json={
+            "category_id": owner_ctx.get("foc_cat_id", "x"),
+            "items": [{"name": "A", "price": 1}],
+        })
+        assert r.status_code == 401
+
+    def test_bulk_create_success(self, owner_ctx):
+        s = owner_ctx["session"]
+        # ensure we have a category
+        cid = owner_ctx.get("foc_cat_id")
+        if not cid:
+            r0 = s.post(f"{API}/categories/find-or-create", json={"name": f"BULKCAT_{uuid.uuid4().hex[:6]}"})
+            cid = r0.json()["category_id"]
+            owner_ctx["foc_cat_id"] = cid
+        payload = {
+            "category_id": cid,
+            "items": [
+                {"name": "BulkItem A", "description": "d1", "price": 5.5, "veg": True, "spicy_level": 1, "bestseller": False},
+                {"name": "BulkItem B", "description": "d2", "price": 7.0, "veg": False, "spicy_level": 2, "bestseller": True},
+                {"name": "BulkItem C", "price": 3.25},
+            ],
+        }
+        r = s.post(f"{API}/items/bulk", json=payload)
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["created"] == 3
+        assert len(j["items"]) == 3
+        names = {it["name"] for it in j["items"]}
+        assert {"BulkItem A", "BulkItem B", "BulkItem C"}.issubset(names)
+        for it in j["items"]:
+            assert it["category_id"] == cid
+            assert "_id" not in it
+            assert it["item_id"].startswith("item_")
+        # verify persistence via list
+        r2 = s.get(f"{API}/items")
+        assert r2.status_code == 200
+        all_names = {i["name"] for i in r2.json()}
+        assert {"BulkItem A", "BulkItem B", "BulkItem C"}.issubset(all_names)
+
+    def test_bulk_nonexistent_category_404(self, owner_ctx):
+        r = owner_ctx["session"].post(f"{API}/items/bulk", json={
+            "category_id": "cat_doesnotexist_xyz",
+            "items": [{"name": "X", "price": 1}],
+        })
+        assert r.status_code == 404
+
+    def test_bulk_other_owner_category_404(self, owner_ctx):
+        # Register a second owner and create a category, then attempt bulk with first owner's session
+        unique = uuid.uuid4().hex[:8]
+        s2 = requests.Session()
+        reg = s2.post(f"{API}/auth/register", json={
+            "email": f"TEST_owner2_{unique}@example.com",
+            "password": "OwnerPass123!",
+            "name": f"TEST Owner2 {unique}",
+            "restaurant_name": f"TEST Diner2 {unique}",
+        })
+        assert reg.status_code == 200, reg.text
+        tok2 = reg.json()["token"]
+        uid2 = reg.json()["user_id"]
+        s2.headers.update({"Authorization": f"Bearer {tok2}"})
+        cr = s2.post(f"{API}/categories", json={"name": "OtherCat", "order": 0})
+        assert cr.status_code == 200
+        other_cid = cr.json()["category_id"]
+        # First owner tries to bulk-add into other owner's category
+        r = owner_ctx["session"].post(f"{API}/items/bulk", json={
+            "category_id": other_cid,
+            "items": [{"name": "Sneaky", "price": 1}],
+        })
+        assert r.status_code == 404, r.text
+        # Cleanup second owner via admin
+        try:
+            adm = requests.Session()
+            lg = adm.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+            adm.headers.update({"Authorization": f"Bearer {lg.json()['token']}"})
+            adm.delete(f"{API}/admin/users/{uid2}")
+        except Exception:
+            pass
+
+
 # ---------- Cleanup: cascade delete ----------
 class TestCleanupCascade:
     def test_delete_user_cascade(self, admin_client, owner_ctx):

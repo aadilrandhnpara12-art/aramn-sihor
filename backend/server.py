@@ -253,6 +253,16 @@ class AIDescribeRequest(BaseModel):
     hints: Optional[str] = ""
 
 
+class AITranslateRequest(BaseModel):
+    text: str
+    target_language: str  # "hi", "en", "es", "fr", "ar"
+
+
+class BulkItemsRequest(BaseModel):
+    category_id: str
+    items: List[dict]  # [{name, description, price, veg, spicy_level, bestseller}]
+
+
 class UpdatePlanRequest(BaseModel):
     plan: str  # free|starter|premium|business
     days: int = 30
@@ -928,6 +938,170 @@ async def ai_describe(body: AIDescribeRequest, user: dict = Depends(require_owne
     except Exception as e:
         raise HTTPException(500, f"AI error: {e}")
     return {"description": (text or "").strip()}
+
+
+@api.post("/ai/translate")
+async def ai_translate(body: AITranslateRequest, user: dict = Depends(require_owner)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(500, f"LLM lib missing: {e}")
+    lang_map = {"hi": "Hindi", "en": "English", "es": "Spanish", "fr": "French", "ar": "Arabic", "de": "German", "zh": "Chinese"}
+    target = lang_map.get(body.target_language, body.target_language)
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"trans-{user['user_id']}-{uuid.uuid4().hex[:6]}",
+        system_message=f"You are a professional translator. Translate the given menu text into {target}. Return ONLY the translated text, no notes.",
+    ).with_model("anthropic", "claude-sonnet-4-6")
+    try:
+        text = await chat.send_message(UserMessage(text=body.text))
+    except Exception as e:
+        raise HTTPException(500, f"AI error: {e}")
+    return {"translated": (text or "").strip(), "language": target}
+
+
+@api.post("/ai/menu-from-photo")
+async def ai_menu_from_photo(file: UploadFile = File(...), user: dict = Depends(require_owner)):
+    """Extract menu items from a photo of a paper menu or handwritten list using Claude vision."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(400, "Only images allowed")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    except Exception:
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            ImageContent = None
+        except Exception as e:
+            raise HTTPException(500, f"LLM lib missing: {e}")
+
+    import base64, json as _json
+    data = await file.read()
+    b64 = base64.b64encode(data).decode()
+    mime = file.content_type
+
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"menu-photo-{user['user_id']}-{uuid.uuid4().hex[:6]}",
+        system_message=(
+            "You are a menu-extraction expert. Given a photo of a restaurant menu (paper, chalkboard, or handwritten), "
+            "extract every item you can read. For each item return: name, description (short, may be empty), price (float, "
+            "strip currency symbols), category (best guess like Starters, Mains, Drinks, Desserts), veg (boolean if identifiable "
+            "otherwise true), spicy_level (0-3 if identifiable otherwise 0), bestseller (false unless clearly marked). "
+            "Respond ONLY with a JSON object of the shape: "
+            '{"items":[{"name":"...","description":"...","price":9.99,"category":"Starters","veg":true,"spicy_level":0,"bestseller":false}]}. '
+            "No prose, no code fences, no extra keys."
+        ),
+    ).with_model("anthropic", "claude-sonnet-4-6")
+
+    if ImageContent is not None:
+        try:
+            msg = UserMessage(text="Extract every menu item from this photo. Return only the JSON.", file_contents=[ImageContent(image_base64=b64)])
+        except TypeError:
+            try:
+                msg = UserMessage(text="Extract every menu item from this photo. Return only the JSON.", file_contents=[ImageContent(b64)])
+            except TypeError:
+                # Fallback if ImageContent signature differs further
+                msg = UserMessage(text="Extract every menu item from this photo. Return only the JSON.", file_contents=[ImageContent(mime_type=mime, image_base64=b64)])
+    else:
+        # As a last-resort text-only path (unlikely to give great results but keeps endpoint functional)
+        msg = UserMessage(text=f"Base64 image ({mime}) below — extract items as specified.\n{b64[:2000]}")
+
+    try:
+        text = await chat.send_message(msg)
+    except Exception as e:
+        raise HTTPException(500, f"AI vision error: {e}")
+
+    # Parse JSON from response
+    raw = (text or "").strip()
+    # Strip code fences if any
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        if raw.startswith("json"):
+            raw = raw[4:]
+    # find first { and last }
+    l = raw.find("{"); r = raw.rfind("}")
+    if l >= 0 and r > l:
+        raw = raw[l:r+1]
+    try:
+        parsed = _json.loads(raw)
+        items = parsed.get("items", [])
+    except Exception:
+        items = []
+
+    # Normalise and clamp
+    cleaned = []
+    for it in items:
+        try:
+            cleaned.append({
+                "name": str(it.get("name", "")).strip(),
+                "description": str(it.get("description", "") or "").strip(),
+                "price": float(it.get("price") or 0),
+                "category": str(it.get("category", "General")).strip() or "General",
+                "veg": bool(it.get("veg", True)),
+                "spicy_level": max(0, min(3, int(it.get("spicy_level", 0) or 0))),
+                "bestseller": bool(it.get("bestseller", False)),
+            })
+        except Exception:
+            continue
+    return {"items": cleaned, "count": len(cleaned)}
+
+
+@api.post("/items/bulk")
+async def bulk_create_items(body: BulkItemsRequest, user: dict = Depends(require_owner)):
+    r = await get_owner_restaurant(user)
+    # Verify category belongs to owner
+    cat = await db.categories.find_one({"category_id": body.category_id, "restaurant_id": r["restaurant_id"]})
+    if not cat:
+        raise HTTPException(404, "Category not found")
+    created = []
+    for it in body.items:
+        doc = {
+            "item_id": f"item_{uuid.uuid4().hex[:10]}",
+            "restaurant_id": r["restaurant_id"],
+            "category_id": body.category_id,
+            "name": str(it.get("name", "")).strip() or "Unnamed",
+            "description": str(it.get("description", "") or "").strip(),
+            "price": float(it.get("price") or 0),
+            "image_url": it.get("image_url"),
+            "veg": bool(it.get("veg", True)),
+            "bestseller": bool(it.get("bestseller", False)),
+            "spicy_level": int(it.get("spicy_level", 0) or 0),
+            "available": True,
+            "order": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "views": 0,
+        }
+        await db.menu_items.insert_one(doc)
+        doc.pop("_id", None)
+        created.append(doc)
+    return {"created": len(created), "items": created}
+
+
+@api.post("/categories/find-or-create")
+async def find_or_create_category(request: Request, user: dict = Depends(require_owner)):
+    """Helper for AI import: find category by name (case-insensitive) or create it."""
+    r = await get_owner_restaurant(user)
+    body = await request.json()
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    existing = await db.categories.find_one({"restaurant_id": r["restaurant_id"], "name": {"$regex": f"^{name}$", "$options": "i"}}, {"_id": 0})
+    if existing:
+        return existing
+    doc = {
+        "category_id": f"cat_{uuid.uuid4().hex[:10]}",
+        "restaurant_id": r["restaurant_id"],
+        "name": name,
+        "order": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.categories.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 
 # ---------- Owner Analytics ----------
