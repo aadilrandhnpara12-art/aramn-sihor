@@ -10,7 +10,8 @@ export function AuthProvider({ children }) {
       const { data } = await api.get("/auth/me");
       setUser(data);
     } catch {
-      setUser(false);
+      // Don't overwrite a real user set by login while stale check is pending
+      setUser((cur) => (cur && cur.user_id ? cur : false));
     }
   }, []);
 

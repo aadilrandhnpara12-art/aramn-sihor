@@ -59,9 +59,9 @@ export default function PublicMenu() {
   return (
     <div className="warm-bg min-h-screen pb-32" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>
       {/* Banner */}
-      <div className="relative h-56 sm:h-72 bg-gradient-to-br from-orange-100 via-amber-50 to-rose-100 overflow-hidden">
+      <div className="relative h-56 sm:h-72 overflow-hidden" style={{ background: "linear-gradient(135deg, #431407 0%, #7c2d12 50%, #431407 100%)" }}>
         {r.banner_url && <img src={`${BACKEND_URL}${r.banner_url}`} className="absolute inset-0 w-full h-full object-cover" alt="" />}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/20" />
         <button onClick={share} data-testid="menu-share" className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/90 backdrop-blur grid place-items-center text-warm-ink shadow-lg">
           <ShareNetwork size={18} weight="bold" />
         </button>
@@ -75,8 +75,8 @@ export default function PublicMenu() {
               <div className="text-3xl menu-serif font-bold text-orange-500">{r.name.slice(0,1)}</div>}
           </div>
           <div className="pb-2 min-w-0 flex-1">
-            <h1 className="menu-serif font-bold text-3xl text-white drop-shadow-lg truncate">{r.name}</h1>
-            {r.tagline && <div className="text-white/90 text-sm drop-shadow">{r.tagline}</div>}
+            <h1 className="menu-serif font-bold text-3xl text-white truncate" style={{ textShadow: "0 2px 12px rgba(0,0,0,0.6)" }}>{r.name}</h1>
+            {r.tagline && <div className="text-white/95 text-sm" style={{ textShadow: "0 1px 6px rgba(0,0,0,0.6)" }}>{r.tagline}</div>}
           </div>
         </div>
 
