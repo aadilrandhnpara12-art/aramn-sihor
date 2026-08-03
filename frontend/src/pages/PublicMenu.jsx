@@ -114,7 +114,10 @@ export default function PublicMenu() {
     try {
       if (navigator.share) await navigator.share({ title: r.name, url: window.location.href });
       else { await navigator.clipboard.writeText(window.location.href); toast.success("Link copied"); }
-    } catch {}
+    } catch (err) {
+      // User dismissal of navigator.share is expected — only log unexpected errors
+      if (err?.name !== "AbortError") console.error("Share failed:", err);
+    }
   };
 
   return (

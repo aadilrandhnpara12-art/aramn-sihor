@@ -58,6 +58,7 @@ export default function OwnerDashboard() {
   useEffect(() => {
     if (user === false) nav("/login");
     if (user && user.role === "admin") nav("/admin");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, nav]);
 
   const load = async () => {
@@ -72,7 +73,9 @@ export default function OwnerDashboard() {
       setCats(c.data);
       setItems(i.data);
       setTables(t.data);
-    } catch (e) {}
+    } catch (err) {
+      console.error("Owner dashboard load failed:", err);
+    }
   };
 
   useEffect(() => { if (user && user.user_id) load(); /* eslint-disable-next-line */ }, [user?.user_id]);

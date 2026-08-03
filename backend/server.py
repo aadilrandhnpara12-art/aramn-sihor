@@ -713,10 +713,7 @@ async def public_restaurant(slug: str, table: Optional[str] = None):
         "table": table,
         "at": datetime.now(timezone.utc).isoformat(),
     })
-    return {
-        "restaurant": r, "categories": cats, "items": items,
-        "reviews_summary": {"average": avg, "count": len(revs_agg)},
-    }
+    return {"restaurant": r, "categories": cats, "items": items, "reviews_summary": {"average": avg, "count": len(revs_agg)}}
 
 
 @api.post("/public/orders")
@@ -1036,8 +1033,12 @@ async def ai_menu_from_photo(file: UploadFile = File(...), user: dict = Depends(
     except Exception as e:
         raise HTTPException(500, f"AI vision error: {e}")
 
+    # Ensure text is always a string before parsing
+    if text is None:
+        text = ""
+
     # Parse JSON from response
-    raw = (text or "").strip()
+    raw = str(text).strip()
     # Strip code fences if any
     if raw.startswith("```"):
         raw = raw.strip("`")

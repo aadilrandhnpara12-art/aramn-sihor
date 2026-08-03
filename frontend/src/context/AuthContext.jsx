@@ -9,8 +9,12 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.get("/auth/me");
       setUser(data);
-    } catch {
-      // Don't overwrite a real user set by login while stale check is pending
+    } catch (err) {
+      // Expected when user is not authenticated — /auth/me returns 401.
+      // Don't overwrite a real user set by login while stale check is pending.
+      if (err?.response?.status !== 401) {
+        console.error("Auth check failed:", err);
+      }
       setUser((cur) => (cur && cur.user_id ? cur : false));
     }
   }, []);
@@ -25,7 +29,8 @@ export function AuthProvider({ children }) {
   }, [checkAuth]);
 
   const logout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
+    try { await api.post("/auth/logout"); }
+    catch (err) { console.error("Logout API error:", err); }
     setUser(false);
   };
 

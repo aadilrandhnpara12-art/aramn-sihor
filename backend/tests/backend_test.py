@@ -17,8 +17,8 @@ if not BASE_URL:
 BASE_URL = BASE_URL.rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "aadilrandhnpara12@gmail.com"
-ADMIN_PASSWORD = "Admin@12345"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "aadilrandhnpara12@gmail.com")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 
 
 @pytest.fixture(scope="session")
@@ -36,7 +36,7 @@ def owner_ctx():
     """Register a fresh owner + return session and info."""
     unique = uuid.uuid4().hex[:8]
     email = f"TEST_owner_{unique}@example.com"
-    password = "OwnerPass123!"
+    password = os.environ.get("TEST_OWNER_PASSWORD", "OwnerPass123!")
     name = f"TEST Owner {unique}"
     rname = f"TEST Diner {unique}"
     s = requests.Session()

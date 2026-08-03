@@ -32,13 +32,14 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (user === false) nav("/login");
     else if (user && user.role !== "admin") nav("/dashboard");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, nav]);
 
   const load = async () => {
     try {
       const [s, u, p] = await Promise.all([api.get("/admin/stats"), api.get("/admin/users"), api.get("/admin/plans")]);
       setStats(s.data); setUsers(u.data); setPlans(p.data);
-    } catch {}
+    } catch (err) { console.error("Admin dashboard load failed:", err); }
   };
   useEffect(() => { if (user?.role === "admin") load(); }, [user?.role]);
 
