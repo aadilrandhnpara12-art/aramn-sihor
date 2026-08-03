@@ -1,0 +1,118 @@
+{
+  "theme_strategy": "Dual Aesthetic Architecture. Dark futuristic 'Cyberpunk' for Admin/Owner Dashboards. Warm, appetizing, premium 'Modern Restaurant' for the Public Customer Menu.",
+  "typography": {
+    "primary_headings": "Outfit",
+    "body": "IBM Plex Sans",
+    "data_and_code": "JetBrains Mono",
+    "public_menu_headings": "Cabinet Grotesk",
+    "rules": [
+      "No Inter or generic sans for headings.",
+      "Headings must use tight letter spacing (tracking-tight).",
+      "Overlines and labels must be uppercase, tiny, wide spacing (tracking-[0.2em]).",
+      "Dashboard numbers and analytics use JetBrains Mono."
+    ]
+  },
+  "colors": {
+    "dashboard_theme": {
+      "mode": "dark",
+      "base": "#05050A",
+      "surface": "#0F0F16",
+      "border": "#27273A",
+      "text_primary": "#FFFFFF",
+      "text_secondary": "#A1A1AA",
+      "accent_primary": "#00F0FF",
+      "accent_secondary": "#D946EF",
+      "glow_effects": "rgba(0, 240, 255, 0.15)",
+      "forbidden_colors": [
+        "#7351B7",
+        "#1B93A4"
+      ]
+    },
+    "public_menu_theme": {
+      "mode": "light",
+      "base": "#FDFBF7",
+      "surface": "#FFFFFF",
+      "border": "#E5E5E5",
+      "text_primary": "#1C1B1A",
+      "text_secondary": "#78716C",
+      "accent_primary": "#EA580C",
+      "bestseller_badge": "#E06B53",
+      "veg_badge": "#16A34A",
+      "nonveg_badge": "#DC2626"
+    }
+  },
+  "surfaces_and_borders": {
+    "dashboard_cards": "Grid Borders strategy. 1px solid border-white/10. No thick rounded corners, max rounded-md. Flat background, no muddy transparency.",
+    "marketing_hero": "Dark void background. Heavy use of radial gradient meshes behind content. Tracing beam effect on feature cards.",
+    "public_menu_cards": "Minimalist cardless or subtle glassmorphism. rounded-2xl or rounded-3xl for food items. Image heavy.",
+    "glassmorphism_rules": "For sticky headers/floating navs: backdrop-blur-xl with bg-black/60 (dark) or bg-white/70 (light). 1px delicate inner stroke mandatory. NEVER pure transparent."
+  },
+  "layouts_and_spacing": {
+    "spacing_scale": "Use 2-3x more spacing. p-8, p-12, p-16 for containers.",
+    "dashboard_grid": "High Density Grid (Mode B). Tight gaps (gap-4). Span logic utilized for charts.",
+    "public_menu_grid": "Mobile-First. 1 column on mobile, 2-3 on desktop. Large image focus.",
+    "optical_alignment": "Align visually, not just mathematically."
+  },
+  "visual_enhancers": {
+    "textures": "Subtle noise overlay (opacity-5) on the dashboard base to kill digital flatness.",
+    "gradients": "No 100% full-screen gradients. Use localized blur circles (glows) behind key elements like the QR code generator.",
+    "badges": "Pill-shaped, dense, high contrast. e.g., bg-red-500/10 text-red-500 border border-red-500/20."
+  },
+  "animations_motion": {
+    "hover_states": "translate-y-[-2px] with subtle shadow boost and border color illumination.",
+    "entrance": "Framer motion staggered fade-up for menu items and dashboard widgets.",
+    "microinteractions": "Button active state scale(0.98). QR code generation scanning line animation.",
+    "rules": "Respect prefers-reduced-motion. No transition-all."
+  },
+  "image_urls": {
+    "marketing_hero": {
+      "url": "https://images.unsplash.com/photo-1671408913477-7fad16acaac2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwzfHxmdXR1cmlzdGljJTIwbmVvbiUyMHJlc3RhdXJhbnR8ZW58MHx8fHwxNzg1NzYyNDMwfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Futuristic neon restaurant vibe, use for Super Admin / Landing Page Hero."
+    },
+    "public_menu_burger": {
+      "url": "https://images.pexels.com/photos/18987002/pexels-photo-18987002.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Premium gourmet burger on dark background. Use in customer-facing menu."
+    },
+    "public_menu_coffee": {
+      "url": "https://images.unsplash.com/photo-1729277133095-bff46b56c29a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwzfHxhcnRpc2FuJTIwY29mZmVlJTIwd2FybSUyMGxpZ2h0aW5nfGVufDB8fHx8MTc4NTc2MjQzMHww&ixlib=rb-4.1.0&q=85",
+      "description": "Artisan coffee pour. Use in customer-facing menu category."
+    },
+    "qr_scan_action": {
+      "url": "https://images.unsplash.com/photo-1600147131759-880e94a6185f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzJ8MHwxfHNlYXJjaHwxfHxwZXJzb24lMjBzY2FubmluZyUyMFFSJTIwY29kZSUyMHJlc3RhdXJhbnR8ZW58MHx8fHwxNzg1NzYyNDMwfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Person scanning QR code. Use for marketing features section."
+    }
+  },
+  "component_instructions": {
+    "buttons": "Pill-shaped or sharp depending on theme. Must have distinct focus and hover states. Never rely on inheritance for hover text color.",
+    "cards": "Do not overuse Shadcn default cards for marketing. Build custom HTML/Tailwind structures for overlapping and bento grid asymmetry. Use Shadcn for Admin panels but customize radii and borders.",
+    "tables": "Shadcn tables with custom dense spacing for Admin Dashboard.",
+    "forms": "Use Shadcn Form, Input, Select. Never native inputs. Use custom validation feedback."
+  },
+  "libraries": {
+    "icons": "yarn add @phosphor-icons/react",
+    "animations": "yarn add framer-motion",
+    "toasts": "yarn add sonner",
+    "qr_code": "yarn add qrcode.react",
+    "charts": "yarn add recharts"
+  },
+  "accessibility": {
+    "contrast": "Ensure APCA contrast compliance. Text below 18px needs 4.5:1. Never use gray-on-gray.",
+    "testing": "All interactive elements MUST include data-testid attribute. Format: kebab-case, role-based. e.g., data-testid='login-submit-button'",
+    "focus": "Explicit focus:ring-2 on all inputs and buttons. Never outline-none without replacement."
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid the 'AI slop' aesthetic.",
+    "DO NOT use Inter, Space Grotesk, Roboto, Open Sans, or Lato for headings. Use Outfit or Cabinet Grotesk.",
+    "DO NOT apply universal transitions like 'transition: all'. It breaks transforms.",
+    "DO NOT center align the app container (.App { text-align: center; } is FORBIDDEN).",
+    "DO NOT use generic centered layouts or simplistic gradients.",
+    "DO NOT use AI assistant emojis for icons.",
+    "Create depth through layered design elements and Z-index hierarchy.",
+    "Use glass-morphism effects with backdrop-blur-xl and inner strokes. NEVER pure transparent.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Implement micro-animations on all interactive elements.",
+    "Use the specific image URLs provided. Never use placeholder text for images.",
+    "Dual Aesthetic: Admin/Owner dashboards must be dark, dense, high-end cyberpunk. Public menu must be light, warm, appetizing, and mobile-first.",
+    "All interactive elements MUST have a data-testid attribute."
+  ]
+}
